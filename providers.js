@@ -9,16 +9,19 @@ const CONFIG = {
   shweboost: {
     url: process.env.SHWEBOOST_API_URL,
     key: process.env.SHWEBOOST_API_KEY,
-    currency: 'MMK',
-    // provider's own cost is already in MMK - we mark it up
-    toSaleCost: (providerCostMMK) =>
-      providerCostMMK * Number(process.env.SHWEBOOST_MARKUP_MULTIPLIER || 2.3)
+    currency: 'USD',
+    // ShweBoost's own API quotes rate/balance/order-status in USD (confirmed
+    // from their API docs) - convert to MMK, then mark up
+    toSaleCost: (providerCostUSD) =>
+      providerCostUSD *
+      Number(process.env.SHWEBOOST_USD_TO_MMK || 4400) *
+      Number(process.env.SHWEBOOST_MARKUP_MULTIPLIER || 2.3)
   },
   secsers: {
     url: process.env.SECSERS_API_URL,
     key: process.env.SECSERS_API_KEY,
     currency: 'USD',
-    // provider's cost comes back in USD - convert to MMK, then mark up
+    // Secsers also quotes in USD - convert to MMK, then mark up
     toSaleCost: (providerCostUSD) =>
       providerCostUSD *
       Number(process.env.SECSERS_USD_TO_MMK || 4400) *

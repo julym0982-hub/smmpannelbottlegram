@@ -123,6 +123,7 @@ const ADMIN_HELP_TEXT = () => `👑 Admin Commands
 /removecategory <categoryMongoId> - category (service အားလုံးအပါအဝင်) ဖျက်မည်
 /syncservices - provider API မှ rate/min/max အားလုံး ပြန် sync မည်
 /testcost <serviceMongoId> <quantity> - ကုန်ကျငွေ တွက်ချက်ပုံ debug လုပ်မည်
+/setduration <serviceMongoId> <text> - ကြာချိန် manual သတ်မှတ်မည် (ShweBoost API မှာ ကြာချိန် data လုံးဝမပါလာပါ)
 
 --- User စီမံခန့်ခွဲမှု ---
 /ban <id> | /unban <id>
@@ -265,7 +266,7 @@ async function startLinkFlow(ctx, service, category) {
   s.platform = category.platform;
   s.categoryLabel = category.label;
   s.serviceLabel = service.label;
-  const formatted = providers.formatDuration(service.avgTime);
+  const formatted = service.manualDuration || providers.formatDuration(service.avgTime);
   const duration = formatted || 'Provider ပေါ်တွင် မူတည်ပါသည်';
   await ctx.reply(texts.t('ask_link', { duration }));
 }
@@ -870,6 +871,22 @@ bot.command(['-id', 'removeid'], async (ctx) => {
 // debug helper: shows exactly how a cost was derived, so if a price looks
 // wrong you can immediately see whether the raw provider rate is the
 // problem or the markup math is the problem.
+// ShweBoost's API has NO duration field at all - so admin can set one
+// manually per service (Secsers might supply avgTime automatically, but a
+// manual override always wins if set).
+bot.command('setduration', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  const serviceId = parts[1];
+  const duration = parts.slice(2).join(' ');
+  if (!serviceId || !duration) {
+    return ctx.reply('ပုံစံ: /setduration <serviceMongoId> <duration text>\nဥပမာ: /setduration 66a2f3d2... 18 မိနစ်\nဥပမာ: /setduration 66a2f3d2... 30 မိနစ် - 1 နာရီ');
+  }
+  const service = await Service.findByIdAndUpdate(serviceId, { manualDuration: duration });
+  if (!service) return ctx.reply('❌ Service မတွေ့ပါ။');
+  await ctx.reply(`✅ "${service.label}" ရဲ့ ကြာချိန်ကို "${duration}" အဖြစ် သတ်မှတ်ပြီးပါပြီ။`);
+});
+
 bot.command('testcost', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const parts = ctx.message.text.split(' ');
@@ -886,7 +903,7 @@ bot.command('testcost', async (ctx) => {
       `Stored rate (per 1000, provider's own currency): ${service.rate}\n` +
       `Quantity: ${quantity}\n` +
       `Provider cost for this quantity: ${providerCost.toFixed(4)} ${providers.CONFIG[service.provider].currency}\n` +
-      `Markup formula applied: ${service.provider === 'shweboost' ? `x${process.env.SHWEBOOST_MARKUP_MULTIPLIER || 2.3}` : `x${process.env.SECSERS_USD_TO_MMK || 4400} (USD→MMK) x${process.env.SECSERS_MARKUP_MULTIPLIER || 1}`}\n` +
+      `Markup formula applied: x${process.env[service.provider === 'shweboost' ? 'SHWEBOOST_USD_TO_MMK' : 'SECSERS_USD_TO_MMK'] || 4400} (USD→MMK) x${process.env[service.provider === 'shweboost' ? 'SHWEBOOST_MARKUP_MULTIPLIER' : 'SECSERS_MARKUP_MULTIPLIER'] || (service.provider === 'shweboost' ? 2.3 : 1)}\n` +
       `Final sale cost: ${cost} ကျပ်\n\n` +
       `⚠️ ဒီအရေအတွက် မှားနေရင် "Stored rate" ကို ${service.provider} dashboard ထဲက service ရဲ့ rate နှင့် တိုက်စစ်ပါ - /syncservices ဖြင့် ပြန် sync လုပ်နိုင်ပါတယ်။`
     );

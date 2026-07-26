@@ -8,7 +8,8 @@
 - **MongoDB** သုံးထားပြီ (JSON file မဟုတ်တော့ပါ) — user, order, category, service, coupon, editable-text အားလုံး database ထဲ
 - **Platform → Category → Service** အဆင့်ဆင့် menu — ဥပမာ Telegram → "Reaction တိုးရန်❤️" → ❤️/👍/👎/🔥/... (emoji buttons scroll လုပ်လို့ရအောင် bottom keyboard နဲ့ ပြထားသည်), "Views တိုးရန်👀" ကဲ့သို့ category တစ်ခုမှာ service တစ်ခုတည်း ရှိရင် တန်းပြီး link မေးမည်
 - **Provider နှစ်ခု (ShweBoost + Secsers)** — service တစ်ခုချင်းစီအတွက် ဘယ် provider ကို သုံးမလဲ admin ရွေးထားနိုင်ပြီး rate/min/max ကို provider API ကနေ **အလိုအလျောက် fetch** လုပ်ပေးပါတယ် (manual ရိုက်စရာ မလိုပါ)
-- **ကျသင့်ငွေတွက်နည်း**: ShweBoost (MMK) → `rate × 2.3` (env: `SHWEBOOST_MARKUP_MULTIPLIER`); Secsers (USD) → `rate × 4400 (env: SECSERS_USD_TO_MMK) × markup`
+- **ကျသင့်ငွေတွက်နည်း**: provider နှစ်ခုစလုံး (ShweBoost + Secsers) ရဲ့ API က rate/balance ကို **USD** ဖြင့် ပြသည် (ShweBoost ကိုယ်တိုင် documentation အရ) — ဒါကြောင့် နှစ်ခုစလုံး `rate(USD) × 4400 (USD→MMK) × markup` ဖြင့် တွက်သည် (env: `SHWEBOOST_USD_TO_MMK`/`SHWEBOOST_MARKUP_MULTIPLIER`, `SECSERS_USD_TO_MMK`/`SECSERS_MARKUP_MULTIPLIER`)
+- **ကြာချိန် (average time)**: ShweBoost API မှာ ဒီ field လုံးဝ မပါလာပါ (သူတို့ documentation အရ services list မှာ service/name/type/category/rate/min/max/refill/cancel ပဲ ပါသည်) — ဒါကြောင့် admin က `/setduration <serviceMongoId> <text>` ဖြင့် manual ထည့်ပေးရမည် (ဥပမာ `/setduration 66a2... 18 မိနစ်`)
 - Order တင်ပြီးရင် **Order History** ထဲမှာ link/quantity/before-count/remaining/status ကို **provider API ကနေ တိုက်ရိုက်** ပြပေးမည်၊ **Cancel Order** button ကလည်း provider API ကို ခေါ်ပြီး cancel အောင်မြင်ရင် cashback ပြန်ပေး၊ မအောင်မြင်ရင် "ဆောင်ရွက်လျက်ရှိပါတယ်" ပြမည်
 - Order **complete** ဖြစ်တာနဲ့ background job (၅ မိနစ်တိုင်း, batch 40 ခုစီ, delay ခံ) က user ကို အလိုအလျောက် message ပို့ပေးမည် — order အများကြီးရှိလည်း bot crash မဖြစ်အောင် batch/delay လုပ်ထားသည်
 - **Balance မလုံလောက်ရင်** "ငွေထပ်ဖြည့်ပေးပါနော်🥰" ဆိုပြီး ငွေဖြည့်ရန် button ချက်ချင်း ပြမည်

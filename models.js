@@ -45,6 +45,7 @@ const ServiceSchema = new mongoose.Schema({
   min: Number,
   max: Number,
   avgTime: String,
+  manualDuration: String, // admin-set override, e.g. "18 မိနစ်" - used when the provider API gives no duration at all (ShweBoost never does)
   lastSynced: Date,
   createdAt: { type: Date, default: Date.now }
 });
