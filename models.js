@@ -1,0 +1,82 @@
+const mongoose = require('mongoose');
+
+const UserSchema = new mongoose.Schema({
+  _id: { type: String }, // telegram id as string
+  username: String,
+  firstName: String,
+  balance: { type: Number, default: 0 },
+  totalSpent: { type: Number, default: 0 },
+  banned: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+});
+
+// One platform (Telegram, Tiktok, Facebook...) has many categories.
+// A category is one of the buttons shown after picking a platform,
+// e.g. "Reaction တိုးရန်❤️" or "Views တိုးရန်👀" or "Tiktok like👍".
+const CategorySchema = new mongoose.Schema({
+  platform: { type: String, required: true }, // e.g. "telegram", "tiktok", "facebook"
+  label: { type: String, required: true },    // button text shown to users
+  createdAt: { type: Date, default: Date.now }
+});
+
+// A service lives inside a category. If a category has only ONE service,
+// the user skips straight to the link/quantity flow when they tap the
+// category button. If it has MORE than one, the user sees another row of
+// buttons (e.g. all the reaction emojis) to pick the exact service.
+const ServiceSchema = new mongoose.Schema({
+  categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
+  label: { type: String, required: true },       // button text, e.g. "♥️" or "👍♥️🔥😁🎉 +Views"
+  provider: { type: String, enum: ['shweboost', 'secsers'], required: true },
+  providerServiceId: { type: String, required: true },
+  // cached from the provider's "services" API endpoint so we don't have to
+  // call it on every single order (refreshed by /syncservices)
+  providerName: String,
+  rate: Number,     // provider's cost per 1000, in the provider's own currency
+  min: Number,
+  max: Number,
+  avgTimeMinutes: Number,
+  lastSynced: Date,
+  createdAt: { type: Date, default: Date.now }
+});
+
+const OrderSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' },
+  platform: String,
+  categoryLabel: String,
+  serviceLabel: String,
+  provider: String,
+  providerOrderId: String,
+  link: String,
+  quantity: Number,
+  cost: Number, // MMK charged to the user's balance
+  status: { type: String, default: 'pending' }, // pending/in progress/completed/cancelled/partial/error
+  startCount: Number,
+  remains: Number,
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+const CouponSchema = new mongoose.Schema({
+  _id: { type: String }, // the code itself
+  amount: Number,
+  remaining: Number,
+  createdAt: { type: Date, default: Date.now }
+});
+
+// simple editable-text store so admin can change any bot message without
+// touching code - value may contain ${placeholders} that get filled in at
+// send-time (see texts.js)
+const SettingSchema = new mongoose.Schema({
+  _id: { type: String }, // the text key, e.g. "welcome"
+  value: String
+});
+
+module.exports = {
+  User: mongoose.model('User', UserSchema),
+  Category: mongoose.model('Category', CategorySchema),
+  Service: mongoose.model('Service', ServiceSchema),
+  Order: mongoose.model('Order', OrderSchema),
+  Coupon: mongoose.model('Coupon', CouponSchema),
+  Setting: mongoose.model('Setting', SettingSchema)
+};
