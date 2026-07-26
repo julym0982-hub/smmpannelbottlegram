@@ -13,6 +13,16 @@ const UserSchema = new mongoose.Schema({
 // One platform (Telegram, Tiktok, Facebook...) has many categories.
 // A category is one of the buttons shown after picking a platform,
 // e.g. "Reaction တိုးရန်❤️" or "Views တိုးရန်👀" or "Tiktok like👍".
+// A "home button" - the very first row of buttons shown after tapping
+// ❤️ရရှိနိုင်သောservice များ❤️ (e.g. "Telegram Service", "Tiktok Service").
+// Kept as its own collection (not just derived from Category) so an admin
+// can create the home button BEFORE any category/service exists under it.
+const PlatformSchema = new mongoose.Schema({
+  _id: { type: String }, // short key used internally, e.g. "telegram"
+  label: { type: String, required: true }, // what the button actually says
+  createdAt: { type: Date, default: Date.now }
+});
+
 const CategorySchema = new mongoose.Schema({
   platform: { type: String, required: true }, // e.g. "telegram", "tiktok", "facebook"
   label: { type: String, required: true },    // button text shown to users
@@ -73,6 +83,7 @@ const SettingSchema = new mongoose.Schema({
 });
 
 module.exports = {
+  Platform: mongoose.model('Platform', PlatformSchema),
   User: mongoose.model('User', UserSchema),
   Category: mongoose.model('Category', CategorySchema),
   Service: mongoose.model('Service', ServiceSchema),

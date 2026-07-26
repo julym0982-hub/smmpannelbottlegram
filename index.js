@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const { Telegraf, Markup } = require('telegraf');
-const { User, Category, Service, Order, Coupon } = require('./models');
+const { Platform, User, Category, Service, Order, Coupon } = require('./models');
 const providers = require('./providers');
 const texts = require('./texts');
 
@@ -99,10 +99,23 @@ bot.use(async (ctx, next) => {
 // =======================================================================
 const ADMIN_HELP_TEXT = () => `👑 Admin Commands
 
---- Service စီမံခန့်ခွဲမှု ---
-/+id - platform/category/service အသစ် ထည့်မည် (step by step)
+--- Home button (Telegram Service/Tiktok Service/...) ---
+/addhomebutton <key> <label...> - home button အသစ် ထည့်မည်
+  ဥပမာ: /addhomebutton telegram Telegram Service
+/removehomebutton <key> - home button ဖျက်မည် (category/service အားလုံးပါ ပါ ဖျက်မည်)
+  ဥပမာ: /removehomebutton telegram
+
+--- Service (category ထဲက emoji/button) ---
+/addbutton <platform>|<category>|<button_label>|<provider>|<provider_service_id>
+  တစ်ကြောင်းတည်းနဲ့ ချက်ချင်းထည့်ခြင်း (home button/category မရှိသေးရင် အလိုအလျောက် ဆောက်ပေးမည်)
+  ဥပမာ: /addbutton telegram|Reaction တိုးရန်❤️|♥️|shweboost|1234
+  ဥပမာ (category ထဲ service တစ်ခုတည်းရှိရင် sub-menu ကျော်၍ link တန်းမေးမည်):
+        /addbutton telegram|Views တိုးရန်👀|-|shweboost|5678
+/+id - အဆင့်ဆင့် မေးမြန်းပြီး ထည့်ချင်ရင် (wizard) - /addbutton ရေးနည်းမရင် သုံးပါ
+/services - home button/category/service အားလုံး (id များပါ) ကြည့်မည် - debug
 /-id <serviceMongoId> - service တစ်ခု ဖျက်မည်
-/syncservices - provider API မှ rate/min/max များ အားလုံး ပြန် sync မည်
+/-category <categoryMongoId> - category (service အားလုံးအပါအဝင်) ဖျက်မည်
+/syncservices - provider API မှ rate/min/max အားလုံး ပြန် sync မည်
 
 --- User စီမံခန့်ခွဲမှု ---
 /ban <id> | /unban <id>
@@ -195,16 +208,18 @@ bot.hears(BTN_COUPON, async (ctx) => { st(ctx.from.id).level = 'coupon'; await c
 // Platform -> Category -> Service navigation (bottom keyboard, scrollable)
 // =======================================================================
 async function showPlatformMenu(ctx) {
-  const platforms = await Category.distinct('platform');
-  if (!platforms.length) return ctx.reply('😔 Service များ မထည့်ရသေးပါ။ မကြာမီ ထည့်ပေးပါမယ်ရှင့်။');
-  const rows = chunk(platforms.map(p => p.charAt(0).toUpperCase() + p.slice(1)), 2);
+  const platforms = await Platform.find({}).sort({ _id: 1 });
+  if (!platforms.length) {
+    return ctx.reply('😔 Home button တစ်ခုမှ မထည့်ရသေးပါ။ Admin က /addhomebutton ဖြင့် စထည့်နိုင်ပါတယ်။');
+  }
+  const rows = chunk(platforms.map(p => p.label), 2);
   rows.push([BTN_BACK]);
   await ctx.reply(texts.t('choose_platform'), Markup.keyboard(rows).resize());
 }
 
 async function showCategoryMenu(ctx, platform) {
   const cats = await Category.find({ platform });
-  if (!cats.length) return ctx.reply('😔 ဒီ platform အတွက် categories မရှိသေးပါ။');
+  if (!cats.length) return ctx.reply(`😔 "${platform}" အတွက် category မထည့်ရသေးပါ။ Admin က /+id (သို့) /addbutton ဖြင့် ထည့်နိုင်ပါတယ်။`);
   const rows = chunk(cats.map(c => c.label), 3);
   rows.push([BTN_BACK]);
   const s = st(ctx.from.id);
@@ -246,19 +261,18 @@ bot.on('text', async (ctx, next) => {
 
   // ---- platform/category/service picked from the bottom keyboard ----
   if (s.level === 'platform') {
-    const platform = text.toLowerCase();
-    const exists = await Category.exists({ platform });
-    if (!exists) return; // not a recognised platform label, ignore silently
-    return showCategoryMenu(ctx, platform);
+    const platform = await Platform.findOne({ label: text });
+    if (!platform) return ctx.reply(`❌ "${text}" ဆိုတဲ့ home button မတွေ့ပါ။ Menu ထဲက button ကိုပဲ နှိပ်ပေးပါ။`);
+    return showCategoryMenu(ctx, platform._id);
   }
   if (s.level === 'category') {
     const category = await Category.findOne({ platform: s.platform, label: text });
-    if (!category) return;
+    if (!category) return ctx.reply(`❌ "${text}" ဆိုတဲ့ category မတွေ့ပါ။ Menu ထဲက button ကိုပဲ နှိပ်ပေးပါ။`);
     return enterCategory(ctx, category);
   }
   if (s.level === 'service') {
     const service = await Service.findOne({ categoryId: s.categoryId, label: text });
-    if (!service) return;
+    if (!service) return ctx.reply(`❌ "${text}" ဆိုတဲ့ service မတွေ့ပါ။ Menu ထဲက button ကိုပဲ နှိပ်ပေးပါ။`);
     const category = await Category.findById(s.categoryId);
     return startLinkFlow(ctx, service, category);
   }
@@ -401,6 +415,13 @@ bot.on('text', async (ctx, next) => {
   }
   if (s.level === 'admin_addid_label' && isAdmin(ctx.from.id)) {
     const label = text === '-' ? s.newServiceInfo.providerName : text;
+    let platform = await Platform.findById(s.newPlatform);
+    if (!platform) {
+      platform = await Platform.create({
+        _id: s.newPlatform,
+        label: s.newPlatform.charAt(0).toUpperCase() + s.newPlatform.slice(1) + ' Service'
+      });
+    }
     let category = await Category.findOne({ platform: s.newPlatform, label: s.newCategoryLabel });
     if (!category) category = await Category.create({ platform: s.newPlatform, label: s.newCategoryLabel });
     const service = await Service.create({
@@ -417,7 +438,7 @@ bot.on('text', async (ctx, next) => {
     });
     resetState(ctx.from.id);
     await ctx.reply(
-      `✅ Service ထည့်ပြီးပါပြီ။\nPlatform: ${category.platform}\nCategory: ${category.label}\nButton label: ${label}\nService mongo id (ဖျက်ရန် /-id သုံးမည့် id): ${service._id}`
+      `✅ Service ထည့်ပြီးပါပြီ။\nHome button: ${platform.label} (key: ${platform._id})\nCategory: ${category.label}\nButton label: ${label}\nService mongo id (ဖျက်ရန် /-id သုံးမည့် id): ${service._id}`
     );
     return;
   }
@@ -671,18 +692,133 @@ bot.command('userinfo', async (ctx) => {
 // =======================================================================
 // Admin: service management
 // =======================================================================
+// "Home buttons" = the platform buttons shown first (Telegram Service,
+// Tiktok Service, Facebook Service, ...). These can be created BEFORE any
+// category/service exists under them.
+bot.command('addhomebutton', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  const key = parts[1];
+  const label = parts.slice(2).join(' ');
+  if (!key || !label) {
+    return ctx.reply(
+      'ပုံစံ: /addhomebutton <key> <label...>\n\n' +
+      'ဥပမာ: /addhomebutton telegram Telegram Service\n' +
+      '("key" က internal name - lowercase, space မပါရ။ "label" ကတော့ user မြင်ရမယ့် button စာသား)'
+    );
+  }
+  await Platform.findByIdAndUpdate(key.toLowerCase(), { _id: key.toLowerCase(), label }, { upsert: true });
+  await ctx.reply(`✅ Home button "${label}" (key: ${key.toLowerCase()}) ထည့်ပြီးပါပြီ။`);
+});
+
+bot.command(['removehomebutton', 'decreasehomebutton'], async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const key = ctx.message.text.split(' ')[1];
+  if (!key) return ctx.reply('ပုံစံ: /removehomebutton <key>\nဥပမာ: /removehomebutton telegram');
+  const removed = await Platform.findByIdAndDelete(key.toLowerCase());
+  if (!removed) return ctx.reply('❌ ဒီ key နဲ့ home button မတွေ့ပါ။ /services ဖြင့် key များ စစ်ကြည့်ပါ။');
+  const cats = await Category.find({ platform: key.toLowerCase() });
+  const catIds = cats.map(c => c._id);
+  const { deletedCount: svcDeleted } = await Service.deleteMany({ categoryId: { $in: catIds } });
+  const { deletedCount: catDeleted } = await Category.deleteMany({ platform: key.toLowerCase() });
+  await ctx.reply(`✅ Home button "${removed.label}" ဖျက်ပြီးပါပြီ (category ${catDeleted} ခု, service ${svcDeleted} ခု အပါအဝင်)။`);
+});
+
+// Fast one-line service add (alternative to the /+id step-by-step wizard) -
+// creates the home button + category automatically if they don't exist yet.
+async function addServiceQuick(platformKey, categoryLabel, buttonLabel, provider, providerServiceId) {
+  let platform = await Platform.findById(platformKey);
+  if (!platform) platform = await Platform.create({ _id: platformKey, label: categoryLabel ? `${platformKey.charAt(0).toUpperCase() + platformKey.slice(1)} Service` : platformKey });
+  let category = await Category.findOne({ platform: platformKey, label: categoryLabel });
+  if (!category) category = await Category.create({ platform: platformKey, label: categoryLabel });
+  const info = await providers.fetchServiceInfo(provider, providerServiceId);
+  const label = buttonLabel === '-' ? info.providerName : buttonLabel;
+  const service = await Service.create({
+    categoryId: category._id, label, provider, providerServiceId,
+    providerName: info.providerName, rate: info.rate, min: info.min, max: info.max,
+    avgTimeMinutes: info.avgTimeMinutes, lastSynced: new Date()
+  });
+  return { platform, category, service };
+}
+
+bot.command(['addbutton', 'addservice'], async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const raw = ctx.message.text.split(' ').slice(1).join(' ');
+  const parts = raw.split('|').map(s => s.trim());
+  if (parts.length !== 5) {
+    return ctx.reply(
+      'ပုံစံ: /addbutton <platform_key>|<category_label>|<button_label>|<provider>|<provider_service_id>\n\n' +
+      'ဥပမာ (Telegram Reaction ထဲ ♥️ ထည့်ခြင်း):\n' +
+      '/addbutton telegram|Reaction တိုးရန်❤️|♥️|shweboost|1234\n\n' +
+      'ဥပမာ (Views - category တစ်ခုတည်းမှာ service တစ်ခုတည်း):\n' +
+      '/addbutton telegram|Views တိုးရန်👀|-|shweboost|5678\n\n' +
+      '(button_label နေရာမှာ "-" ရေးရင် provider ရဲ့ service name ကိုပဲ အလိုအလျောက် သုံးပါမယ်)'
+    );
+  }
+  const [platformKey, categoryLabel, buttonLabel, provider, providerServiceId] = parts;
+  if (!['shweboost', 'secsers'].includes(provider.toLowerCase())) {
+    return ctx.reply('❌ provider ကို shweboost သို့မဟုတ် secsers ဟုသာ ရေးပါ။');
+  }
+  try {
+    const { service, category, platform } = await addServiceQuick(
+      platformKey.toLowerCase(), categoryLabel, buttonLabel, provider.toLowerCase(), providerServiceId
+    );
+    await ctx.reply(
+      `✅ ထည့်ပြီးပါပြီ။\nHome button: ${platform.label} (key: ${platform._id})\nCategory: ${category.label}\nButton label: ${service.label}\nService id (ဖျက်ရန်): ${service._id}`
+    );
+  } catch (err) {
+    await ctx.reply('❌ ' + err.message);
+  }
+});
+
 bot.command(['+id', 'addid'], async (ctx) => {
   if (!requireAdmin(ctx)) return;
   st(ctx.from.id).level = 'admin_addid_platform';
-  const platforms = await Category.distinct('platform');
-  const list = platforms.length ? ('\n\nရှိပြီးသား platforms: ' + platforms.join(', ')) : '';
-  await ctx.reply(`Platform ကို ရေးပါ (ဥပမာ telegram/tiktok/facebook)${list}`);
+  const platforms = await Platform.find({});
+  const list = platforms.length ? ('\n\nရှိပြီးသား home button keys: ' + platforms.map(p => p._id).join(', ')) : '';
+  await ctx.reply(`Platform key ကို ရေးပါ (ဥပမာ telegram/tiktok/facebook)${list}`);
+});
+
+bot.command(['services', 'listservices'], async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const platforms = await Platform.find({}).sort({ _id: 1 });
+  const categories = await Category.find({}).sort({ platform: 1 });
+  if (!platforms.length && !categories.length) {
+    return ctx.reply('😔 Home button / Category / Service ဘာမှ မရှိသေးပါ။ /addhomebutton (သို့) /+id ဖြင့် စထည့်ပါ။');
+  }
+  const lines = ['🏠 Home buttons:'];
+  if (!platforms.length) lines.push('  (မရှိသေးပါ)');
+  for (const p of platforms) lines.push(`  • ${p.label}  (key: ${p._id})`);
+  for (const c of categories) {
+    const services = await Service.find({ categoryId: c._id });
+    lines.push(`\n📁 [${c.platform}] ${c.label}  (categoryId: ${c._id})`);
+    if (!services.length) {
+      lines.push('   (service မရှိသေးပါ)');
+    } else {
+      for (const s of services) {
+        lines.push(`   • ${s.label} — ${s.provider}#${s.providerServiceId} — rate:${s.rate} min:${s.min} max:${s.max} — id:${s._id}`);
+      }
+    }
+  }
+  // Telegram messages cap at 4096 chars - split into chunks if needed
+  const full = lines.join('\n');
+  for (let i = 0; i < full.length; i += 3500) {
+    await ctx.reply(full.slice(i, i + 3500));
+  }
+});
+
+bot.command(['-category', 'removecategory'], async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const id = ctx.message.text.split(' ')[1];
+  if (!id) return ctx.reply('ပုံစံ: /-category <categoryMongoId>\n(category ဖျက်ရင် အောက်က service အားလုံးပါ ပါ ဖျက်ပါမည်)');
+  const cat = await Category.findByIdAndDelete(id).catch(() => null);
+  if (!cat) return ctx.reply('❌ Category မတွေ့ပါ။');
+  const { deletedCount } = await Service.deleteMany({ categoryId: id });
+  await ctx.reply(`✅ Category "${cat.label}" နှင့် service ${deletedCount} ခု ဖျက်ပြီးပါပြီ။`);
 });
 
 bot.command(['-id', 'removeid'], async (ctx) => {
   if (!requireAdmin(ctx)) return;
-  const id = ctx.message.text.split(' ')[1];
-  if (!id) return ctx.reply('ပုံစံ: /-id <serviceMongoId>');
   const res = await Service.findByIdAndDelete(id).catch(() => null);
   await ctx.reply(res ? '✅ Service ဖျက်ပြီးပါပြီ။' : '❌ Service မတွေ့ပါ။');
 });
