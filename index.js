@@ -709,6 +709,22 @@ bot.command('userinfo', async (ctx) => {
 // =======================================================================
 // Admin: service management
 // =======================================================================
+// Telegram keyboard buttons (reply AND inline) cannot render Markdown bold -
+// this converts plain Latin letters/digits to Unicode "Mathematical Bold"
+// look-alikes so button labels still LOOK bold. Non-Latin characters
+// (Burmese, emoji, etc.) pass through unchanged.
+function toBoldUnicode(str) {
+  const out = [];
+  for (const ch of str) {
+    const code = ch.codePointAt(0);
+    if (code >= 65 && code <= 90) out.push(String.fromCodePoint(0x1D400 + (code - 65)));       // A-Z
+    else if (code >= 97 && code <= 122) out.push(String.fromCodePoint(0x1D41A + (code - 97)));  // a-z
+    else if (code >= 48 && code <= 57) out.push(String.fromCodePoint(0x1D7CE + (code - 48)));   // 0-9
+    else out.push(ch);
+  }
+  return out.join('');
+}
+
 // "Home buttons" = the platform buttons shown first (Telegram Service,
 // Tiktok Service, Facebook Service, ...). These can be created BEFORE any
 // category/service exists under them.
@@ -716,14 +732,15 @@ bot.command('addhomebutton', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const parts = ctx.message.text.split(' ');
   const key = parts[1];
-  const label = parts.slice(2).join(' ');
-  if (!key || !label) {
+  const rawLabel = parts.slice(2).join(' ');
+  if (!key || !rawLabel) {
     return ctx.reply(
       'ပုံစံ: /addhomebutton <key> <label...>\n\n' +
       'ဥပမာ: /addhomebutton telegram Telegram Service\n' +
-      '("key" က internal name - lowercase, space မပါရ။ "label" ကတော့ user မြင်ရမယ့် button စာသား)'
+      '("key" က internal name - lowercase, space မပါရ။ "label" ကတော့ user မြင်ရမယ့် button စာသား - Latin စာလုံးများကို bold ပုံစံအဖြစ် အလိုအလျောက် ပြောင်းပေးမည်)'
     );
   }
+  const label = toBoldUnicode(rawLabel);
   await Platform.findByIdAndUpdate(key.toLowerCase(), { _id: key.toLowerCase(), label }, { upsert: true });
   await ctx.reply(`✅ Home button "${label}" (key: ${key.toLowerCase()}) ထည့်ပြီးပါပြီ။`);
 });
