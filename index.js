@@ -9,10 +9,9 @@ const texts = require('./texts');
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 const MONGODB_URI = process.env.MONGODB_URI;
-const KPAY_NUMBER = process.env.KPAY_NUMBER || '09xxxxxxxxx';
-const KPAY_NAME = process.env.KPAY_NAME || 'Your Name';
-const WAVE_NUMBER = process.env.WAVE_NUMBER || '09xxxxxxxxx';
-const WAVE_NAME = process.env.WAVE_NAME || 'Your Name';
+// KPay/Wave numbers are editable at runtime via /setkpay and /setwave
+// (stored through texts.js so they persist in MongoDB) - the .env values
+// above are only the first-time defaults.
 
 if (!BOT_TOKEN) { console.error('BOT_TOKEN missing'); process.exit(1); }
 if (!MONGODB_URI) { console.error('MONGODB_URI missing'); process.exit(1); }
@@ -143,6 +142,8 @@ const ADMIN_HELP_TEXT = () => `👑 Admin Commands
 /cuponcode <amount> <count> [code]
 
 --- Text အယ်ဒစ်လုပ်ရန် ---
+/setkpay <number> <name...> - Kpay နံပါတ်/နာမည် ချက်ချင်းပြောင်းမည်
+/setwave <number> <name...> - Wave နံပါတ်/နာမည် ချက်ချင်းပြောင်းမည်
 /texts - ပြင်လို့ရသော message key များ ကြည့်မည်
 /edittext <key> <new text with \${placeholders}>`;
 
@@ -480,12 +481,12 @@ bot.action('go_topup', async (ctx) => { await ctx.answerCbQuery(); await ctx.rep
 bot.action('topup_kpay', async (ctx) => {
   await ctx.answerCbQuery();
   const s = st(ctx.from.id); s.method = 'KPay'; s.level = 'topup_screenshot';
-  await ctx.reply(`${texts.t('topup_min')}\n\nkpay - ${KPAY_NUMBER}\nname - ${KPAY_NAME}\n\n${texts.t('topup_ask_screenshot')}`);
+  await ctx.reply(`${texts.t('topup_min')}\n\nkpay - ${texts.t('kpay_number')}\nname - ${texts.t('kpay_name')}\n\n${texts.t('topup_ask_screenshot')}`);
 });
 bot.action('topup_wave', async (ctx) => {
   await ctx.answerCbQuery();
   const s = st(ctx.from.id); s.method = 'Wave'; s.level = 'topup_screenshot';
-  await ctx.reply(`${texts.t('topup_min')}\n\nWave - ${WAVE_NUMBER}\nName - ${WAVE_NAME}\n\n${texts.t('topup_ask_screenshot')}`);
+  await ctx.reply(`${texts.t('topup_min')}\n\nWave - ${texts.t('wave_number')}\nName - ${texts.t('wave_name')}\n\n${texts.t('topup_ask_screenshot')}`);
 });
 
 bot.on('photo', async (ctx) => {
@@ -569,9 +570,30 @@ bot.action('place_order', async (ctx) => {
 
 // =======================================================================
 // Order status refresh + cancel
+//
+// IMPORTANT: cashback is only ever given here, when the provider's STATUS
+// API confirms an order is actually "Canceled" - never just because a
+// cancel *request* was accepted. This correctly covers both:
+//   1) the user pressing "Cancel Order" (we submit the request, then wait)
+//   2) the provider cancelling on its own later (refill/drip issues etc.)
 // =======================================================================
+const CANCELLED_STATUSES = ['canceled', 'cancelled'];
+
+async function refundIfCancelled(order) {
+  if (order.refunded) return; // already handled, never double-refund
+  order.refunded = true;
+  await order.save();
+  const user = await User.findById(order.userId);
+  if (user) {
+    user.balance += order.cost;
+    user.totalSpent = Math.max(0, (user.totalSpent || 0) - order.cost);
+    await user.save();
+  }
+  await safeSend(order.userId, texts.t('order_cancel_success', { cost: order.cost }));
+}
+
 async function refreshOrderStatuses(orders) {
-  const active = orders.filter(o => !['completed', 'cancelled', 'error'].includes(String(o.status).toLowerCase()));
+  const active = orders.filter(o => !['completed', 'error'].includes(String(o.status).toLowerCase()) && !o.refunded);
   const byProvider = {};
   for (const o of active) (byProvider[o.provider] = byProvider[o.provider] || []).push(o);
 
@@ -592,8 +614,13 @@ async function refreshOrderStatuses(orders) {
         if (info.remains !== undefined) o.remains = Number(info.remains);
         o.updatedAt = new Date();
         await o.save();
-        if (!wasCompleted && String(o.status).toLowerCase() === 'completed') {
+
+        const statusLower = String(o.status).toLowerCase();
+        if (!wasCompleted && statusLower === 'completed') {
           await safeSend(o.userId, texts.t('order_complete', { link: o.link, service: o.serviceLabel || o.categoryLabel }));
+        }
+        if (CANCELLED_STATUSES.includes(statusLower)) {
+          await refundIfCancelled(o);
         }
       }
     } catch (err) {
@@ -610,17 +637,17 @@ bot.action(/^cancel_order_([0-9a-fA-F]{24})$/, async (ctx) => {
     return ctx.reply('ℹ️ ဒီ order ကို cancel လုပ်၍ မရတော့ပါ။');
   }
   try {
-    const ok = await providers.cancelOrder(order.provider, order.providerOrderId);
-    if (ok) {
-      order.status = 'cancelled'; await order.save();
-      const user = await User.findById(order.userId);
-      if (user) { user.balance += order.cost; user.totalSpent = Math.max(0, (user.totalSpent || 0) - order.cost); await user.save(); }
-      await ctx.reply(texts.t('order_cancel_success', { cost: order.cost }));
+    // this only SUBMITS the cancel request - it does NOT refund anything.
+    // Cashback happens later (within a few minutes) once /status confirms
+    // the provider actually cancelled it - see refreshOrderStatuses above.
+    const submitted = await providers.cancelOrder(order.provider, order.providerOrderId);
+    if (submitted) {
+      await ctx.reply('🕐 Cancel request တင်ပြီးပါပြီရှင့်။ Provider ဆီက အတည်ပြုပြီးမှသာ cashback ပြန်ပေးပါမည် (မိနစ်အနည်းငယ် စောင့်ပေးပါ) ❤️');
     } else {
       await ctx.reply(texts.t('order_cancel_fail'));
     }
   } catch (err) {
-    await ctx.reply('❌ Cancel checking အတွင်း error တက်သည်: ' + err.message);
+    await ctx.reply('❌ Cancel တောင်းဆိုစဉ် error တက်သည်: ' + err.message);
   }
 });
 
@@ -1001,6 +1028,28 @@ bot.command('cuponcode', async (ctx) => {
 // =======================================================================
 // Admin: editable texts
 // =======================================================================
+bot.command('setkpay', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  const number = parts[1];
+  const name = parts.slice(2).join(' ');
+  if (!number || !name) return ctx.reply('ပုံစံ: /setkpay <number> <name...>\nဥပမာ: /setkpay 09123456789 Nan Su');
+  await texts.setText('kpay_number', number);
+  await texts.setText('kpay_name', name);
+  await ctx.reply(`✅ Kpay ကို ပြောင်းပြီးပါပြီ:\nkpay - ${number}\nname - ${name}`);
+});
+
+bot.command('setwave', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  const number = parts[1];
+  const name = parts.slice(2).join(' ');
+  if (!number || !name) return ctx.reply('ပုံစံ: /setwave <number> <name...>\nဥပမာ: /setwave 09123456789 Nan Su');
+  await texts.setText('wave_number', number);
+  await texts.setText('wave_name', name);
+  await ctx.reply(`✅ Wave ကို ပြောင်းပြီးပါပြီ:\nWave - ${number}\nName - ${name}`);
+});
+
 bot.command('texts', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const lines = texts.allKeys().map(k => `• ${k}`);

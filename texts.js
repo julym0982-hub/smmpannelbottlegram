@@ -3,6 +3,10 @@ const { Setting } = require('./models');
 // Defaults. ${placeholders} get substituted at send time. Admin can override
 // any of these permanently with:  /edittext <key> <new text with ${placeholders}>
 const DEFAULTS = {
+  kpay_number: process.env.KPAY_NUMBER || '09xxxxxxxxx',
+  kpay_name: process.env.KPAY_NAME || 'Your Name',
+  wave_number: process.env.WAVE_NUMBER || '09xxxxxxxxx',
+  wave_name: process.env.WAVE_NAME || 'Your Name',
   welcome: 'မဂ္ဂလာပါ ${name} ရေ ❤️\nlike/views တိုး bot မှ ကြိုဆိုပါတယ်ရှင့် 😊',
   balance_msg: 'မဂ္ဂလာပါ ${name} လက်ကျန်ငွေ (${balance}) ကျန်ရှိပါသေးတယ်ရှင့် ❤️',
   insufficient_balance: '${name} ရေ လက်ကျန်ငွေ မလုံလောက်ဘူးလို့ ငွေထပ်ဖြည့်ပေးပါနော် 🥰',

@@ -62,6 +62,7 @@ const OrderSchema = new mongoose.Schema({
   quantity: Number,
   cost: Number, // MMK charged to the user's balance
   status: { type: String, default: 'pending' }, // pending/in progress/completed/cancelled/partial/error
+  refunded: { type: Boolean, default: false }, // guards against double refund on cancel
   startCount: Number,
   remains: Number,
   createdAt: { type: Date, default: Date.now },
