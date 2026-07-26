@@ -210,7 +210,10 @@ bot.hears(BTN_COUPON, async (ctx) => { st(ctx.from.id).level = 'coupon'; await c
 async function showPlatformMenu(ctx) {
   const platforms = await Platform.find({}).sort({ _id: 1 });
   if (!platforms.length) {
-    return ctx.reply('😔 Home button တစ်ခုမှ မထည့်ရသေးပါ။ Admin က /addhomebutton ဖြင့် စထည့်နိုင်ပါတယ်။');
+    return ctx.reply(isAdmin(ctx.from.id)
+      ? '😔 Home button တစ်ခုမှ မထည့်ရသေးပါ။ Admin က /addhomebutton ဖြင့် စထည့်နိုင်ပါတယ်။'
+      : '😔 Service များ မကြာမီ ထည့်ပေးပါမယ်ရှင့်။'
+    );
   }
   const rows = chunk(platforms.map(p => p.label), 2);
   rows.push([BTN_BACK]);
@@ -219,7 +222,12 @@ async function showPlatformMenu(ctx) {
 
 async function showCategoryMenu(ctx, platform) {
   const cats = await Category.find({ platform });
-  if (!cats.length) return ctx.reply(`😔 "${platform}" အတွက် category မထည့်ရသေးပါ။ Admin က /+id (သို့) /addbutton ဖြင့် ထည့်နိုင်ပါတယ်။`);
+  if (!cats.length) {
+    return ctx.reply(isAdmin(ctx.from.id)
+      ? `😔 "${platform}" အတွက် category မထည့်ရသေးပါ။ Admin က /+id (သို့) /addbutton ဖြင့် ထည့်နိုင်ပါတယ်။`
+      : '😔 ဒီ Service အတွက် ခဏနေမှ ထည့်ပေးပါမယ်ရှင့်။'
+    );
+  }
   const rows = chunk(cats.map(c => c.label), 3);
   rows.push([BTN_BACK]);
   const s = st(ctx.from.id);
@@ -229,7 +237,12 @@ async function showCategoryMenu(ctx, platform) {
 
 async function enterCategory(ctx, category) {
   const services = await Service.find({ categoryId: category._id });
-  if (!services.length) return ctx.reply('😔 ဒီ category အတွက် service များ မရှိသေးပါ။');
+  if (!services.length) {
+    return ctx.reply(isAdmin(ctx.from.id)
+      ? '😔 ဒီ category အတွက် service များ မရှိသေးပါ။ /addbutton (သို့) /+id ဖြင့် ထည့်ပါ။'
+      : '😔 ခဏနေမှ ထည့်ပေးပါမယ်ရှင့်။'
+    );
+  }
   if (services.length === 1) return startLinkFlow(ctx, services[0], category);
   const rows = chunk(services.map(s => s.label), 4);
   rows.push([BTN_BACK]);
@@ -258,6 +271,10 @@ const MYANMAR_DIGITS = /[၀-၉]/;
 bot.on('text', async (ctx, next) => {
   const text = ctx.message.text.trim();
   const s = st(ctx.from.id);
+
+  // any real command (starts with "/") must always reach the command
+  // handlers below - never let leftover menu/wizard state swallow it
+  if (text.startsWith('/')) return next();
 
   // ---- platform/category/service picked from the bottom keyboard ----
   if (s.level === 'platform') {
