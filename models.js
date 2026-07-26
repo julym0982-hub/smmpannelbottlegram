@@ -50,6 +50,14 @@ const ServiceSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+// Extra custom buttons admin can add to the bottom of the main menu
+// (e.g. "Contact Admin" that opens a link to the admin's Telegram chat).
+const MenuButtonSchema = new mongoose.Schema({
+  _id: { type: String }, // the label itself, e.g. "☎️ Contact Admin"
+  url: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
 const OrderSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' },
@@ -85,6 +93,7 @@ const SettingSchema = new mongoose.Schema({
 });
 
 module.exports = {
+  MenuButton: mongoose.model('MenuButton', MenuButtonSchema),
   Platform: mongoose.model('Platform', PlatformSchema),
   User: mongoose.model('User', UserSchema),
   Category: mongoose.model('Category', CategorySchema),

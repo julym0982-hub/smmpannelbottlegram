@@ -84,9 +84,26 @@ npm start
 4. Environment tab ထဲမှာ `.env.example` ထဲက variable အားလုံး ထည့်ပါ (PORT ကို Render auto ထည့်ပေးမည်)
 5. Deploy လုပ်ပါ — bot က long-polling နဲ့ run နေမည် (webhook မလိုပါ)
 
+## Bot ရပ်သွားခြင်း / Render free tier "sleep" ပြဿနာ
+
+Render ရဲ့ **Free** Web Service plan ဟာ ~၁၅ မိနစ် inbound HTTP traffic မရှိရင် instance ကို "sleep" ဖြစ်စေပါတယ် — Telegram bot ကတော့ user message စောင့်နေတဲ့ long-polling process မို့ ဒီလို sleep ဖြစ်သွားရင် bot ရပ်သွားပါတယ်။
+
+ဒါကို ကာကွယ်ဖို့ bot ထဲမှာ **self-ping** ကို built-in ထည့်ထားပါပြီ — `RENDER_EXTERNAL_URL` ဆိုတဲ့ environment variable ကို Render က auto ထည့်ပေးထားမှာမို့ (setup ဘာမှ မလိုပါ) bot က ကိုယ့်ဟာကိုယ် ၄ မိနစ်တိုင်း ping ပေးပြီး Render ကို "traffic ရှိနေတယ်" လို့ မြင်စေမှာပါ။
+
+**နောက်ထပ် အာမခံချက် (recommended)**: [UptimeRobot](https://uptimerobot.com) (free) ကို အသုံးပြုပြီး bot ရဲ့ public URL (ဥပမာ `https://your-bot.onrender.com`) ကို ၅ မိနစ်တိုင်း monitor/ping လုပ်ထားရင် ပိုစိတ်ချရပါတယ် — self-ping တစ်ခုတည်း အလွတ်ချန်မထားပဲ backup ရှိသင့်ပါတယ်။
+
+Bot code ထဲမှာလည်း crash မဖြစ်အောင် (uncaught error/rejection catch, MongoDB disconnect logging) safety net များ ထည့်ထားပါပြီ — ဒါပေမယ့် Render free tier ရဲ့ sleep behavior ကိုတော့ code ထဲကနေ ၁၀၀% မတားနိုင်ပါ (self-ping/UptimeRobot ရှိမှ အာမခံရပါမယ်)။ အမြဲတမ်း ၂၄/၇ အာမခံလိုရင် Render ရဲ့ **paid** plan (sleep မလုပ်တော့ပါ) ကို စဉ်းစားနိုင်ပါတယ်။
+
 ## Facebook services
 
 Facebook အတွက် category/service တွေကို ခုနောက်ပိုင်း (နောက်ထပ် message) ထဲမှာ ဆက်ရေးပေးပါမည် လို့ ပြောထားတာကြောင့် အခုအတွက် Telegram/Tiktok ကို ဦးစားပေး ထားပါတယ်။ Facebook အတွက်လည်း အတူတူပဲ `/addid` သုံးပြီး ထည့်လို့ရပါတယ် (platform: `facebook`)။
+
+## Main menu ထဲ button အသစ် ထည့်ခြင်း (ဥပမာ Contact Admin)
+
+```
+/addmenubutton ☎️ Contact Admin|https://t.me/YourAdminUsername
+```
+ဒါက main menu (❤️ရရှိနိုင်သောservice များ❤️,💰လက်ကျန်ငွေ💰...) ရဲ့ အောက်ဆုံးမှာ button အသစ် ထပ်ထည့်ပေးမည်။ User က နှိပ်တာနဲ့ ပေးထားတဲ့ URL ကို ဖွင့်ရန် inline button ကို ပြပေးမည် (Telegram profile link, Facebook page, ဘာ link မဆို ထည့်လို့ရသည်)။ ဖျက်ရန်: `/removemenubutton ☎️ Contact Admin` (label အတိအကျ ကူးရေးပါ)။
 
 ## သတိပြုစရာ
 

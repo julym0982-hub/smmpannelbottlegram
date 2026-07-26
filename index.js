@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const { Telegraf, Markup } = require('telegraf');
-const { Platform, User, Category, Service, Order, Coupon } = require('./models');
+const { MenuButton, Platform, User, Category, Service, Order, Coupon } = require('./models');
 const providers = require('./providers');
 const texts = require('./texts');
 
@@ -50,8 +50,11 @@ const BTN_HISTORY = '📜Order History📜';
 const BTN_COUPON = 'Cupon⁉️';
 const BTN_BACK = '◀️ နောက်ပြန်ဆုတ်ရန်';
 
-function mainMenuKeyboard() {
-  return Markup.keyboard([[BTN_SERVICES], [BTN_BALANCE], [BTN_TOPUP], [BTN_HISTORY], [BTN_COUPON]]).resize();
+async function mainMenuKeyboard() {
+  const extras = await MenuButton.find({});
+  const rows = [[BTN_SERVICES], [BTN_BALANCE], [BTN_TOPUP], [BTN_HISTORY], [BTN_COUPON]];
+  for (const b of extras) rows.push([b._id]);
+  return Markup.keyboard(rows).resize();
 }
 function topupMethodKeyboard() {
   return Markup.inlineKeyboard([
@@ -102,56 +105,136 @@ bot.use(async (ctx, next) => {
 // =======================================================================
 // /start
 // =======================================================================
-const ADMIN_HELP_TEXT = () => `👑 Admin Commands
+const ADMIN_GUIDE = [
+`👑 Admin Guide (၁/၇) — မိတ်ဆက်
 
---- Home button (Telegram Service/Tiktok Service/...) ---
-/addhomebutton <key> <label...> - home button အသစ် ထည့်မည်
-  ဥပမာ: /addhomebutton telegram Telegram Service
-/removehomebutton <key> - home button ဖျက်မည် (category/service အားလုံးပါ ပါ ဖျက်မည်)
-  ဥပမာ: /removehomebutton telegram
+မင်္ဂလာပါ Admin ရေ! ဒီ guide ကို အဆင့်ဆင့် ဖတ်ပြီး လိုက်လုပ်ရုံပါပဲ။ Command တစ်ခုချင်းစီကို ဘယ်လိုသုံးရမလဲ ဥပမာနဲ့ တကွ ရှင်းပြထားပါတယ်။
 
---- Service (category ထဲက emoji/button) ---
-/addbutton <platform>|<category>|<button_label>|<provider>|<provider_service_id>
-  တစ်ကြောင်းတည်းနဲ့ ချက်ချင်းထည့်ခြင်း (home button/category မရှိသေးရင် အလိုအလျောက် ဆောက်ပေးမည်)
-  ဥပမာ: /addbutton telegram|Reaction တိုးရန်❤️|♥️|shweboost|1234
-  ဥပမာ (category ထဲ service တစ်ခုတည်းရှိရင် sub-menu ကျော်၍ link တန်းမေးမည်):
-        /addbutton telegram|Views တိုးရန်👀|-|shweboost|5678
-/addid - အဆင့်ဆင့် မေးမြန်းပြီး ထည့်ချင်ရင် (wizard) - /addbutton ရေးနည်းမရင် သုံးပါ
-/services - home button/category/service အားလုံး (id များပါ) ကြည့်မည် - debug
-/removeid <serviceMongoId> - service တစ်ခု ဖျက်မည်
-/removecategory <categoryMongoId> - category (service အားလုံးအပါအဝင်) ဖျက်မည်
-/syncservices - provider API မှ rate/min/max အားလုံး ပြန် sync မည်
-/testcost <serviceMongoId> <quantity> - ကုန်ကျငွေ တွက်ချက်ပုံ debug လုပ်မည်
-/setduration <serviceMongoId> <text> - ကြာချိန် manual သတ်မှတ်မည် (ShweBoost API မှာ ကြာချိန် data လုံးဝမပါလာပါ)
+**ပထမဆုံး လုပ်ရမည့် အဆင့် ၃ ဆင့်**:
+1️⃣ Home button ဆောက်ပါ (Telegram Service/Tiktok Service/...)
+2️⃣ ဒီ home button တွေထဲကို category + service (emoji button) တွေ ထည့်ပါ
+3️⃣ Kpay/Wave payment number ထည့်ပါ
 
---- User စီမံခန့်ခွဲမှု ---
-/ban <id> | /unban <id>
-/addmoney <id> <amount> | /decreasemoney <id> <amount>
-/users [page] - user list (10/page), balance/spent/profile link ပါ
-/userinfo <id> - user တစ်ဦးချင်း အသေးစိတ် + အော်ဒါမှတ်တမ်း
-/totaluser
+အောက်က message တွေမှာ တစ်ခုချင်းစီကို အသေးစိတ် ဆက်ပြောပေးပါမယ်။`,
 
---- Order စီမံခန့်ခွဲမှု ---
-/checkorders - အော်ဒါအားလုံး (နောက်ဆုံး 30)
-/removeorder <orderMongoId> - အော်ဒါ မှတ်တမ်းမှ ဖျက်မည် (provider ဆီ ဖျက်ခြင်း မဟုတ်)
-/providerbalance - Shweboost/Secsers ကျန်ရှိငွေ စစ်မည်
+`👑 Admin Guide (၂/၇) — Home button ဆောက်ခြင်း
 
---- Message / Coupon ---
-/sendmessage <id> [message]
-/allsendmessage [message]
+Home button ဆိုတာက user တွေ ❤️ရရှိနိုင်သောservice များ❤️ နှိပ်တာနဲ့ အရင်ဆုံး မြင်ရမယ့် ခလုတ်တွေပါ (ဥပမာ - "Telegram Service", "Tiktok Service")
+
+**Command**: /addhomebutton <key> <label...>
+- key = internal name (English small letter, space မပါရ) ဥပမာ telegram
+- label = user မြင်ရမယ့် စာသား
+
+**လက်တွေ့ ဥပမာ** (ဒီအတိုင်း တစ်ကြောင်းစီ ကူးပို့ပါ):
+/addhomebutton telegram Telegram Service
+/addhomebutton tiktok Tiktok Service
+/addhomebutton facebook Facebook Service
+
+ဒါဆို user ❤️ရရှိနိုင်သောservice များ❤️ နှိပ်တာနဲ့ Telegram/Tiktok/Facebook ဆိုတဲ့ button ၃ ခု (bold) မြင်ရပါပြီ။
+
+ဖျက်ရန်: /removehomebutton telegram (category/service အားလုံးပါ ပါ ဖျက်မည်)`,
+
+`👑 Admin Guide (၃/၇) — Service (emoji button) ထည့်ခြင်း
+
+Home button ထဲကို service (ဥပမာ ♥️,👍 reaction emoji, သို့ Views) ထည့်ဖို့ command ၂ မျိုး ရှိပါတယ်:
+
+**A) တစ်ကြောင်းတည်းနဲ့ ချက်ချင်းထည့်ခြင်း (ကျွမ်းကျင်သွားရင် ပိုမြန်ပါတယ်):**
+/addbutton <platform_key>|<category_label>|<button_label>|<provider>|<provider_service_id>
+
+ဥပမာများ (ShweBoost/Secsers ဝဘ်ဆိုက်ထဲက Services page ကနေ service id ကို ကူးယူပါ):
+/addbutton telegram|Reaction တိုးရန်❤️|♥️|shweboost|1234
+/addbutton telegram|Reaction တိုးရန်❤️|👍|shweboost|1235
+/addbutton telegram|Views တိုးရန်👀|-|shweboost|5678
+/addbutton tiktok|Tiktok like👍|-|secsers|9001
+
+- category_label တူတူ ထပ်ရေးရင် category တစ်ခုထဲကို service အများကြီး ပေါင်းထည့်ပေးမည် (ဥပမာ ♥️,👍,🔥 အားလုံး "Reaction တိုးရန်❤️" ထဲ ရောက်မည်)
+- category ထဲ service **တစ်ခုတည်း** ရှိရင် (ဥပမာ Views) user က category ကို နှိပ်တာနဲ့ တန်းပြီး link တောင်းမည်
+- button_label နေရာမှာ "-" ရေးရင် provider ပေးထားတဲ့ service name ကိုပဲ အလိုအလျောက် သုံးမည်
+- rate/min/max ကို command ထဲ ရေးစရာ မလိုပါ - provider API ကနေ အလိုအလျောက် ဆွဲပေးမည်
+
+**B) အဆင့်ဆင့် မေးမြန်းစနစ် (command ရေးနည်း မကျွမ်းကျင်သေးရင်):**
+/addid ကို ပို့လိုက်ရင် bot က Platform → Category → Provider → Service id → Button label အစဉ်လိုက် မေးပေးပါလိမ့်မယ်`,
+
+`👑 Admin Guide (၄/၇) — Service စစ်ဆေးခြင်း/ပြင်ဆင်ခြင်း
+
+/services - Home button/Category/Service အားလုံးကို id များနှင့်တကွ ပြပေးမည်။ ဘာမှ မြင်ရရင် ဒီ command ကို အမြဲသုံးပြီး sanity check လုပ်ပါ
+
+/removeid <serviceMongoId> - service (emoji button) တစ်ခုတည်း ဖျက်ရန်
+   ဥပမာ: /removeid 66a2f3d2c1a9b0012e4f5678
+/removecategory <categoryMongoId> - category တစ်ခုလုံး (service အားလုံးပါ) ဖျက်ရန်
+
+/syncservices - service အားလုံးရဲ့ rate/min/max ကို provider API မှ ပြန်ဆွဲ update လုပ်မည် (provider ဘက်က ဈေးနှုန်း ပြောင်းနိုင်လို့ ရံဖန်ရံခါ run ပေးရင် ကောင်းပါတယ်)
+
+/testcost <serviceMongoId> <quantity> - user ဆီ ပြမည့် ဈေးနှုန်း တွက်ချက်ပုံ (rate, USD→MMK conversion, markup) အသေးစိတ် ပြပေးမည် - ဈေးနှုန်း မှန်မမှန် စစ်ဖို့ အသုံးဝင်ပါတယ်
+
+/setduration <serviceMongoId> <text> - ကြာချိန် manual ရေးထည့်ရန်
+   ဥပမာ: /setduration 66a2f3d2c1a9b0012e4f5678 18 မိနစ်
+   (ShweBoost API မှာ ကြာချိန် data လုံးဝ မပါလာတာကြောင့် ဒါကို ရေးမထားရင် "အနည်းငယ်ကြာနိုင်ပါတယ်ရှင့်" လို့ပဲ user ဆီ ပြသွားမည်)`,
+
+`👑 Admin Guide (၅/၇) — ငွေဖြည့်ခြင်း/User/Order
+
+**Kpay/Wave number ပြောင်းရန်** (redeploy မလိုပါ, ချက်ချင်း update ဖြစ်မည်):
+/setkpay 09123456789 Nan Su
+/setwave 09123456789 Nan Su
+
+**User management**:
+/ban 123456789 - user ကို ပိတ်မည်
+/unban 123456789 - ပြန်ဖွင့်မည်
+/addmoney 123456789 5000 - balance ထဲ ၅၀၀၀ ကျပ် ထည့်မည်
+/decreasemoney 123456789 5000 - balance ထဲက ၅၀၀၀ ကျပ် နှုတ်မည်
+/users - user list (10 ယောက်/page)၊ /users 2 လို့ ရေးရင် page ၂ ကို ကြည့်ရမည်
+/userinfo 123456789 - user တစ်ဦးချင်း အသေးစိတ် (balance, order history)
+/totaluser - user စုစုပေါင်း
+
+**Order management**:
+/checkorders - order အားလုံး (နောက်ဆုံး ၃၀ခု)
+/removeorder <orderMongoId> - order မှတ်တမ်းမှ ဖျက်ရန် (provider ဘက်က order ကို မထိပါ၊ database မှတ်တမ်းကိုပဲ ဖျက်တာပါ)
+/providerbalance - ShweBoost/Secsers account ထဲ ကျန်ရှိငွေ စစ်ရန်`,
+
+`👑 Admin Guide (၆/၇) — Message/Coupon/Custom menu button
+
+**User ဆီ message ပို့ရန်**:
+/sendmessage 123456789 မင်္ဂလာပါရှင့် - user တစ်ယောက်ထဲကို ပို့မည်
+/sendmessage 123456789 - message မရေးဘဲ ID တစ်ခုတည်း ပို့ရင် bot က "ဘာစာပို့ချင်လဲ" ပြန်မေးမည်
+/allsendmessage သတင်းအသစ်ရှိပါတယ်ရှင့် - user အားလုံးဆီ တစ်ချိန်တည်း ပို့မည်
+
+**Coupon ထုတ်ရန်**:
 /cuponcode <amount> <count> [code]
+ဥပမာ: /cuponcode 100 5 (100 ကျပ်တန်း coupon ကို ၅ ယောက်စာ အသုံးပြုနိုင်အောင် random code ထုတ်မည်)
+ဥပမာ (code ကိုယ်တိုင်ပေးလိုရင်): /cuponcode 100 5 WELCOME100
 
---- Text အယ်ဒစ်လုပ်ရန် ---
-/setkpay <number> <name...> - Kpay နံပါတ်/နာမည် ချက်ချင်းပြောင်းမည်
-/setwave <number> <name...> - Wave နံပါတ်/နာမည် ချက်ချင်းပြောင်းမည်
-/texts - ပြင်လို့ရသော message key များ ကြည့်မည်
-/edittext <key> <new text with \${placeholders}>`;
+**Main menu ထဲ button အသစ် ထည့်ရန်** (ဥပမာ - "Contact Admin" နှိပ်ရင် admin ရဲ့ Telegram chat ကို ရောက်စေရန်):
+/addmenubutton ☎️ Contact Admin|https://t.me/YourAdminUsername
+(YourAdminUsername နေရာမှာ ကိုယ့် Telegram username ကို အစားထိုးပါ)
+
+ဖျက်ရန်: /removemenubutton ☎️ Contact Admin (label အတိအကျ ကူးရေးရပါမည်)`,
+
+`👑 Admin Guide (၇/၇) — Bot ပို့တဲ့ message စာသားများ ပြင်ရန်
+
+Bot ပို့တဲ့ message တွေ (welcome, balance message, order confirm, စသည်) ကို code မထိဘဲ ဒီကနေ ပြင်လို့ရပါတယ်:
+
+/texts - ပြင်လို့ရသော key အားလုံးကို ကြည့်ရန်
+/edittext <key> <new text> - ပြင်ရန်
+
+ဥပမာ: /edittext welcome မင်္ဂလာပါ \${name} ရေ ❤️ ကျွန်တော်တို့ shop ကို ကြိုဆိုပါတယ်
+
+⚠️ \${name}, \${balance}, \${cost} စသည် placeholder တွေကို အတိအကျ ထားခဲ့ပါ - ဒါမှ user နာမည်/ငွေပမာဏ အစား ထည့်ပေးနိုင်မှာပါ။ /texts ထဲက key list ကို ကြည့်ရင် ဘယ် key မှာ ဘယ် placeholder ရှိလဲ သိနိုင်ပါတယ်။
+
+--- 
+ဒီ guide ကို ပြန်ကြည့်ချင်ရင် /start ကို ထပ်နှိပ်ရုံပါပဲ။ Command တစ်ခုခု မှားနေရင် (ဥပမာ /-id လိုမျိုး "-" "+"ဖြင့် စတဲ့ command) Telegram က command အဖြစ် လုံးဝ အသိအမှတ်မပြုပါဘူး - ဒီ guide ထဲက command အတိအကျကိုပဲ သုံးပါ။`
+];
+
+async function sendAdminGuide(ctx) {
+  for (const section of ADMIN_GUIDE) {
+    await ctx.reply(section, { parse_mode: 'Markdown' }).catch(() => ctx.reply(section));
+  }
+}
 
 bot.start(async (ctx) => {
   resetState(ctx.from.id);
   const name = ctx.from.first_name || ctx.from.username || 'User';
-  await ctx.reply(texts.t('welcome', { name }), mainMenuKeyboard());
-  if (isAdmin(ctx.from.id)) await ctx.reply(ADMIN_HELP_TEXT());
+  await ctx.reply(texts.t('welcome', { name }), await mainMenuKeyboard());
+  if (isAdmin(ctx.from.id)) await sendAdminGuide(ctx);
 });
 
 // =======================================================================
@@ -161,7 +244,7 @@ bot.hears(BTN_BACK, async (ctx) => {
   const s = st(ctx.from.id);
   if (s.level === 'platform') {
     resetState(ctx.from.id);
-    return ctx.reply('🏠 မူလ menu သို့ ပြန်သွားပါပြီရှင့်', mainMenuKeyboard());
+    return ctx.reply('🏠 မူလ menu သို့ ပြန်သွားပါပြီရှင့်', await mainMenuKeyboard());
   }
   if (s.level === 'category') {
     s.level = 'platform';
@@ -173,7 +256,7 @@ bot.hears(BTN_BACK, async (ctx) => {
   }
   // link / quantity / topup / coupon / anything else -> just cancel back to main menu
   resetState(ctx.from.id);
-  return ctx.reply('🏠 မူလ menu သို့ ပြန်သွားပါပြီရှင့်', mainMenuKeyboard());
+  return ctx.reply('🏠 မူလ menu သို့ ပြန်သွားပါပြီရှင့်', await mainMenuKeyboard());
 });
 
 // =======================================================================
@@ -268,7 +351,7 @@ async function startLinkFlow(ctx, service, category) {
   s.categoryLabel = category.label;
   s.serviceLabel = service.label;
   const formatted = service.manualDuration || providers.formatDuration(service.avgTime);
-  const duration = formatted || 'Provider ပေါ်တွင် မူတည်ပါသည်';
+  const duration = formatted ? `${formatted} ဖြစ်ပါတယ်ရှင့် ❤️` : 'အနည်းငယ်ကြာနိုင်ပါတယ်ရှင့် ♥️';
   await ctx.reply(texts.t('ask_link', { duration }));
 }
 
@@ -285,6 +368,13 @@ bot.on('text', async (ctx, next) => {
   // any real command (starts with "/") must always reach the command
   // handlers below - never let leftover menu/wizard state swallow it
   if (text.startsWith('/')) return next();
+
+  // admin-added custom menu buttons (e.g. "☎️ Contact Admin") work from
+  // anywhere, regardless of what menu/wizard state the user is currently in
+  const customBtn = await MenuButton.findOne({ _id: text });
+  if (customBtn) {
+    return ctx.reply('👇', Markup.inlineKeyboard([[Markup.button.url(text, customBtn.url)]]));
+  }
 
   // ---- platform/category/service picked from the bottom keyboard ----
   if (s.level === 'platform') {
@@ -320,7 +410,7 @@ bot.on('text', async (ctx, next) => {
     }
     const quantity = parseInt(text, 10);
     const service = await Service.findById(s.serviceId);
-    if (!service) { resetState(ctx.from.id); return ctx.reply('❌ Service မတွေ့ပါ၊ ပြန်လည် ရွေးပေးပါ။', mainMenuKeyboard()); }
+    if (!service) { resetState(ctx.from.id); return ctx.reply('❌ Service မတွေ့ပါ၊ ပြန်လည် ရွေးပေးပါ။', await mainMenuKeyboard()); }
     if (quantity < service.min || quantity > service.max) {
       return ctx.reply(`⚠️ quantity သည် ${service.min} နှင့် ${service.max} ကြားဖြစ်ရပါမည်။`);
     }
@@ -369,7 +459,7 @@ bot.on('text', async (ctx, next) => {
         });
       } catch (err) { console.error('notify admin failed', err.message); }
     }
-    await ctx.reply(texts.t('topup_submitted'), mainMenuKeyboard());
+    await ctx.reply(texts.t('topup_submitted'), await mainMenuKeyboard());
     return;
   }
 
@@ -527,7 +617,7 @@ bot.action('place_order', async (ctx) => {
   if (s.level !== 'confirm') return;
   const service = await Service.findById(s.serviceId);
   const user = await User.findById(String(ctx.from.id));
-  if (!service || !user) { resetState(ctx.from.id); return ctx.reply('❌ Error, ပြန်စမ်းကြည့်ပါ။', mainMenuKeyboard()); }
+  if (!service || !user) { resetState(ctx.from.id); return ctx.reply('❌ Error, ပြန်စမ်းကြည့်ပါ။', await mainMenuKeyboard()); }
 
   if (user.balance < s.cost) {
     resetState(ctx.from.id);
@@ -543,7 +633,7 @@ bot.action('place_order', async (ctx) => {
     providerOrderId = await providers.placeOrder(service.provider, service.providerServiceId, s.link, s.quantity);
   } catch (err) {
     resetState(ctx.from.id);
-    return ctx.reply('❌ Order တင်၍ မရပါ: ' + err.message, mainMenuKeyboard());
+    return ctx.reply('❌ Order တင်၍ မရပါ: ' + err.message, await mainMenuKeyboard());
   }
 
   user.balance -= s.cost;
@@ -565,7 +655,7 @@ bot.action('place_order', async (ctx) => {
   });
 
   resetState(ctx.from.id);
-  await ctx.reply(texts.t('order_success', { cost: s.cost }), mainMenuKeyboard());
+  await ctx.reply(texts.t('order_success', { cost: s.cost }), await mainMenuKeyboard());
 });
 
 // =======================================================================
@@ -760,6 +850,31 @@ function toBoldUnicode(str) {
   }
   return out.join('');
 }
+
+bot.command('addmenubutton', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const raw = ctx.message.text.split(' ').slice(1).join(' ');
+  const parts = raw.split('|').map(s => s.trim());
+  if (parts.length !== 2) {
+    return ctx.reply(
+      'ပုံစံ: /addmenubutton <button label>|<url>\n\n' +
+      'ဥပမာ (Admin ရဲ့ Telegram chat ကို တန်းသွားစေရန်):\n' +
+      '/addmenubutton ☎️ Contact Admin|https://t.me/YourAdminUsername\n\n' +
+      '(url နေရာမှာ ဘယ် link ကိုမဆို ထည့်လို့ရသည် - Telegram profile link, Facebook page link, ဘာမဆို)'
+    );
+  }
+  const [label, url] = parts;
+  await MenuButton.findByIdAndUpdate(label, { _id: label, url }, { upsert: true });
+  await ctx.reply(`✅ Menu button "${label}" ထည့်ပြီးပါပြီ (main menu ရဲ့ အောက်ဆုံးမှာ ပေါ်ပါလိမ့်မယ်)။`);
+});
+
+bot.command('removemenubutton', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const label = ctx.message.text.split(' ').slice(1).join(' ');
+  if (!label) return ctx.reply('ပုံစံ: /removemenubutton <button label အတိအကျ>');
+  const removed = await MenuButton.findByIdAndDelete(label);
+  await ctx.reply(removed ? `✅ "${label}" ဖျက်ပြီးပါပြီ။` : '❌ ဒီ label နဲ့ menu button မတွေ့ပါ။');
+});
 
 // "Home buttons" = the platform buttons shown first (Telegram Service,
 // Tiktok Service, Facebook Service, ...). These can be created BEFORE any
@@ -1070,9 +1185,38 @@ bot.command('edittext', async (ctx) => {
 // =======================================================================
 bot.catch((err, ctx) => console.error(`Bot error for update ${ctx.updateType}:`, err));
 
+// Belt-and-braces: never let one unexpected synchronous throw kill the
+// whole bot process either (unhandledRejection is already handled above).
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (bot keeps running):', err);
+});
+
+// MongoDB: log connection hiccups instead of silently going stale, and let
+// the driver's own auto-reconnect do its job.
+mongoose.connection.on('error', (err) => console.error('MongoDB connection error:', err.message));
+mongoose.connection.on('disconnected', () => console.warn('MongoDB disconnected - driver will try to reconnect...'));
+mongoose.connection.on('reconnected', () => console.log('MongoDB reconnected.'));
+
 const app = express();
 app.get('/', (req, res) => res.send('SMM Telegram bot is running.'));
 const PORT = process.env.PORT || 3000;
+
+// Render's FREE tier spins a "Web Service" down after ~15 minutes with no
+// inbound HTTP traffic - which would kill the bot's long-polling loop too.
+// This pings our own public URL every 4 minutes so Render always sees
+// recent traffic and never puts the service to sleep. RENDER_EXTERNAL_URL
+// is provided automatically by Render - no setup needed. On a paid Render
+// plan (or elsewhere) this is a harmless no-op if that variable isn't set.
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.SELF_PING_URL;
+if (SELF_URL) {
+  setInterval(() => {
+    require('https').get(SELF_URL, (res) => res.resume())
+      .on('error', (err) => console.error('Self-ping failed:', err.message));
+  }, 4 * 60 * 1000);
+  console.log(`Self-ping enabled for ${SELF_URL} (every 4 min) to prevent Render free-tier sleep.`);
+} else {
+  console.log('No RENDER_EXTERNAL_URL/SELF_PING_URL set - self-ping disabled.');
+}
 
 mongoose.connect(MONGODB_URI).then(async () => {
   console.log('MongoDB connected');

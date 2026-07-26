@@ -13,7 +13,7 @@ const DEFAULTS = {
   choose_platform: 'မိမိတိုးချင်တဲ့ social media တစ်ခုခု ရွေးပါရှင့် ❤️',
   choose_category: 'ဝန်ဆောင်မှု အမျိုးအစား ရွေးပါရှင့် ❤️',
   choose_service: 'အသေးစိတ် ရွေးပါရှင့် ❤️',
-  ask_link: 'တိုးမည့် link လေး ပို့ပေးပါရှင့် 🩷\n\nတင်သည့် post က public ဖြစ်ရပါမယ်နော်\nကြာချိန်လေးကတော့ ${duration} ဖြစ်ပါတယ်ရှင့် ❤️',
+  ask_link: 'တိုးမည့် link လေး ပို့ပေးပါရှင့် 🩷\n\nတင်သည့် post က public ဖြစ်ရပါမယ်နော်\nကြာချိန်လေးကတော့ ${duration}',
   ask_quantity: '*တိုးမည့်အရေအတွက်လေး ပို့ပေးပါရှင့်\nEnglish number နဲ့ ရေးပေးနော် ❤️*',
   ask_quantity_number_hint: 'number (123456...) အသုံးပြုပြီး ရေးပေးပါရှင့်',
   order_confirm: 'ကုန်ကျမည့်ငွေ - ${cost} ကျပ် ကျမှာပါရှင့်',
