@@ -17,6 +17,12 @@ const WAVE_NAME = process.env.WAVE_NAME || 'Your Name';
 if (!BOT_TOKEN) { console.error('BOT_TOKEN missing'); process.exit(1); }
 if (!MONGODB_URI) { console.error('MONGODB_URI missing'); process.exit(1); }
 
+// Don't let one unexpected rejected promise (e.g. a transient Telegram API
+// blip) crash the entire bot process - just log it and keep running.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection (bot keeps running):', reason && reason.message || reason);
+});
+
 const bot = new Telegraf(BOT_TOKEN);
 
 // ---------------------------------------------------------------------
@@ -855,6 +861,8 @@ bot.command(['-category', 'removecategory'], async (ctx) => {
 
 bot.command(['-id', 'removeid'], async (ctx) => {
   if (!requireAdmin(ctx)) return;
+  const id = ctx.message.text.split(' ')[1];
+  if (!id) return ctx.reply('ပုံစံ: /removeid <serviceMongoId>');
   const res = await Service.findByIdAndDelete(id).catch(() => null);
   await ctx.reply(res ? '✅ Service ဖျက်ပြီးပါပြီ။' : '❌ Service မတွေ့ပါ။');
 });
@@ -1004,7 +1012,15 @@ mongoose.connect(MONGODB_URI).then(async () => {
   console.log('MongoDB connected');
   await texts.preload();
   app.listen(PORT, () => console.log(`Health-check server listening on port ${PORT}`));
-  bot.launch().then(() => console.log('Bot launched (long polling).'));
+  bot.launch()
+    .then(() => console.log('Bot launched (long polling).'))
+    .catch(err => {
+      // This commonly happens for a few seconds during a Render redeploy,
+      // while the OLD instance is still shutting down and also polling.
+      // Render will restart this process anyway - just log instead of an
+      // unhandled-rejection crash with a confusing stack trace.
+      console.error('Bot launch error (often transient during redeploy):', err.message);
+    });
 }).catch(err => { console.error('MongoDB connection error:', err.message); process.exit(1); });
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
