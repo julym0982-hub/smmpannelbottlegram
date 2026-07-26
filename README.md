@@ -44,9 +44,9 @@
 - `button_label` နေရာမှာ `-` ရေးရင် provider ကနေ fetch ရလာတဲ့ service name ကိုပဲ button label အဖြစ် သုံးမည်
 - `rate/min/max/average time` ကို command ထဲ ရေးစရာ မလိုပါ — provider API ကနေ အလိုအလျောက် ဆွဲပေးမည်
 
-`/addbutton` ရေးနည်း မကျွမ်းကျင်သေးရင် အဆင့်ဆင့် မေးမြန်းပေးမည့် wizard (`/+id`) ကိုလည်း သုံးနိုင်ပါတယ်:
+`/addbutton` ရေးနည်း မကျွမ်းကျင်သေးရင် အဆင့်ဆင့် မေးမြန်းပေးမည့် wizard (`/addid`) ကိုလည်း သုံးနိုင်ပါတယ်:
 ```
-/+id
+/addid
 > telegram          (Platform key)
 > Reaction တိုးရန်❤️  (Category label)
 > shweboost         (Provider)
@@ -56,8 +56,8 @@
 
 **စစ်ဆေးရန်**: `/services` ကို ပို့ရင် home button/category/service အားလုံးကို id များနှင့်တကွ ပြပေးမည် — ဘာမှ မမြင်ရရင် ဒီ command သုံးပြီး ဘယ်အဆင့်မှာ ပျောက်နေလဲ စစ်နိုင်ပါတယ်။
 
-Service ဖျက်ရန်: `/-id <serviceMongoId>` (`/services` output ထဲက id ကို ကူးသုံးပါ)
-Category တစ်ခုလုံး ဖျက်ရန်: `/-category <categoryMongoId>`
+Service ဖျက်ရန်: `/removeid <serviceMongoId>` (`/services` output ထဲက id ကို ကူးသုံးပါ)
+Category တစ်ခုလုံး ဖျက်ရန်: `/removecategory <categoryMongoId>`
 
 ## Setup (Local)
 
@@ -85,7 +85,7 @@ npm start
 
 ## Facebook services
 
-Facebook အတွက် category/service တွေကို ခုနောက်ပိုင်း (နောက်ထပ် message) ထဲမှာ ဆက်ရေးပေးပါမည် လို့ ပြောထားတာကြောင့် အခုအတွက် Telegram/Tiktok ကို ဦးစားပေး ထားပါတယ်။ Facebook အတွက်လည်း အတူတူပဲ `/+id` သုံးပြီး ထည့်လို့ရပါတယ် (platform: `facebook`)။
+Facebook အတွက် category/service တွေကို ခုနောက်ပိုင်း (နောက်ထပ် message) ထဲမှာ ဆက်ရေးပေးပါမည် လို့ ပြောထားတာကြောင့် အခုအတွက် Telegram/Tiktok ကို ဦးစားပေး ထားပါတယ်။ Facebook အတွက်လည်း အတူတူပဲ `/addid` သုံးပြီး ထည့်လို့ရပါတယ် (platform: `facebook`)။
 
 ## သတိပြုစရာ
 

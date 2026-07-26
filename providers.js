@@ -39,22 +39,34 @@ async function call(provider, params) {
   return data;
 }
 
-// Fetch the provider's full services list and find one entry (used both by
-// the admin /+id flow, to auto-fill rate/min/max, and by /syncservices to
-// refresh prices later).
+// Some panels return average completion time under different keys and as a
+// free-text string (e.g. "18 Minutes", "10-30 minutes", "1 Hour"), not a
+// clean number - so we keep the raw text and only extract a number as a
+// best-effort fallback, rather than forcing Number() and silently getting NaN.
 async function fetchServiceInfo(provider, providerServiceId) {
   const list = await call(provider, { action: 'services' });
   if (!Array.isArray(list)) throw new Error('Unexpected response from provider services list');
   const found = list.find(s => String(s.service) === String(providerServiceId));
   if (!found) throw new Error(`Service id ${providerServiceId} ကို ${provider} ထဲမှာ ရှာမတွေ့ပါ`);
+  const rawTime = found.average_time || found.averageTime || found.average || found.time || null;
   return {
     providerName: found.name,
     rate: Number(found.rate),
     min: Number(found.min),
     max: Number(found.max),
-    // some panels return average time in a field like "average_time" or "dripfeed" info; not all do
-    avgTimeMinutes: found.average_time ? Number(found.average_time) : null
+    avgTime: rawTime ? String(rawTime).trim() : null
   };
+}
+
+// Turn whatever the provider gave us (a plain number of minutes, or free
+// text like "10-30 minutes" / "1 Hour") into a friendly Burmese phrase.
+function formatDuration(rawTime) {
+  if (!rawTime) return null;
+  const text = String(rawTime).trim();
+  if (/^\d+$/.test(text)) return `${text} မိနစ်`; // pure number -> assume minutes
+  return text
+    .replace(/hours?/gi, 'နာရီ')
+    .replace(/minutes?|mins?/gi, 'မိနစ်');
 }
 
 // cost of ONE order in MMK, for display + balance deduction
@@ -98,5 +110,5 @@ async function getBalance(provider) {
 }
 
 module.exports = {
-  CONFIG, fetchServiceInfo, calcSaleCost, placeOrder, orderStatus, orderStatusBulk, cancelOrder, getBalance
+  CONFIG, fetchServiceInfo, calcSaleCost, placeOrder, orderStatus, orderStatusBulk, cancelOrder, getBalance, formatDuration
 };

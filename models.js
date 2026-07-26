@@ -44,7 +44,7 @@ const ServiceSchema = new mongoose.Schema({
   rate: Number,     // provider's cost per 1000, in the provider's own currency
   min: Number,
   max: Number,
-  avgTimeMinutes: Number,
+  avgTime: String,
   lastSynced: Date,
   createdAt: { type: Date, default: Date.now }
 });

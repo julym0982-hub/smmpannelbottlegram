@@ -111,11 +111,12 @@ const ADMIN_HELP_TEXT = () => `👑 Admin Commands
   ဥပမာ: /addbutton telegram|Reaction တိုးရန်❤️|♥️|shweboost|1234
   ဥပမာ (category ထဲ service တစ်ခုတည်းရှိရင် sub-menu ကျော်၍ link တန်းမေးမည်):
         /addbutton telegram|Views တိုးရန်👀|-|shweboost|5678
-/+id - အဆင့်ဆင့် မေးမြန်းပြီး ထည့်ချင်ရင် (wizard) - /addbutton ရေးနည်းမရင် သုံးပါ
+/addid - အဆင့်ဆင့် မေးမြန်းပြီး ထည့်ချင်ရင် (wizard) - /addbutton ရေးနည်းမရင် သုံးပါ
 /services - home button/category/service အားလုံး (id များပါ) ကြည့်မည် - debug
-/-id <serviceMongoId> - service တစ်ခု ဖျက်မည်
-/-category <categoryMongoId> - category (service အားလုံးအပါအဝင်) ဖျက်မည်
+/removeid <serviceMongoId> - service တစ်ခု ဖျက်မည်
+/removecategory <categoryMongoId> - category (service အားလုံးအပါအဝင်) ဖျက်မည်
 /syncservices - provider API မှ rate/min/max အားလုံး ပြန် sync မည်
+/testcost <serviceMongoId> <quantity> - ကုန်ကျငွေ တွက်ချက်ပုံ debug လုပ်မည်
 
 --- User စီမံခန့်ခွဲမှု ---
 /ban <id> | /unban <id>
@@ -126,7 +127,7 @@ const ADMIN_HELP_TEXT = () => `👑 Admin Commands
 
 --- Order စီမံခန့်ခွဲမှု ---
 /checkorders - အော်ဒါအားလုံး (နောက်ဆုံး 30)
-/-order <orderMongoId> - အော်ဒါ မှတ်တမ်းမှ ဖျက်မည် (provider ဆီ ဖျက်ခြင်း မဟုတ်)
+/removeorder <orderMongoId> - အော်ဒါ မှတ်တမ်းမှ ဖျက်မည် (provider ဆီ ဖျက်ခြင်း မဟုတ်)
 /providerbalance - Shweboost/Secsers ကျန်ရှိငွေ စစ်မည်
 
 --- Message / Coupon ---
@@ -224,7 +225,7 @@ async function showCategoryMenu(ctx, platform) {
   const cats = await Category.find({ platform });
   if (!cats.length) {
     return ctx.reply(isAdmin(ctx.from.id)
-      ? `😔 "${platform}" အတွက် category မထည့်ရသေးပါ။ Admin က /+id (သို့) /addbutton ဖြင့် ထည့်နိုင်ပါတယ်။`
+      ? `😔 "${platform}" အတွက် category မထည့်ရသေးပါ။ Admin က /addid (သို့) /addbutton ဖြင့် ထည့်နိုင်ပါတယ်။`
       : '😔 ဒီ Service အတွက် ခဏနေမှ ထည့်ပေးပါမယ်ရှင့်။'
     );
   }
@@ -239,7 +240,7 @@ async function enterCategory(ctx, category) {
   const services = await Service.find({ categoryId: category._id });
   if (!services.length) {
     return ctx.reply(isAdmin(ctx.from.id)
-      ? '😔 ဒီ category အတွက် service များ မရှိသေးပါ။ /addbutton (သို့) /+id ဖြင့် ထည့်ပါ။'
+      ? '😔 ဒီ category အတွက် service များ မရှိသေးပါ။ /addbutton (သို့) /addid ဖြင့် ထည့်ပါ။'
       : '😔 ခဏနေမှ ထည့်ပေးပါမယ်ရှင့်။'
     );
   }
@@ -258,7 +259,8 @@ async function startLinkFlow(ctx, service, category) {
   s.platform = category.platform;
   s.categoryLabel = category.label;
   s.serviceLabel = service.label;
-  const duration = service.avgTimeMinutes ? `${service.avgTimeMinutes} မိနစ်ခန့်` : 'Provider ပေါ်တွင် မူတည်ပါသည်';
+  const formatted = providers.formatDuration(service.avgTime);
+  const duration = formatted || 'Provider ပေါ်တွင် မူတည်ပါသည်';
   await ctx.reply(texts.t('ask_link', { duration }));
 }
 
@@ -390,7 +392,7 @@ bot.on('text', async (ctx, next) => {
     return ctx.reply(`✅ User ${sent}/${users.length} ဆီကို ပို့ပြီးပါပြီ။`);
   }
 
-  // ---- admin: /+id wizard ----
+  // ---- admin: /addid wizard ----
   if (s.level === 'admin_addid_platform' && isAdmin(ctx.from.id)) {
     s.newPlatform = text.toLowerCase();
     s.level = 'admin_addid_category';
@@ -450,12 +452,12 @@ bot.on('text', async (ctx, next) => {
       rate: s.newServiceInfo.rate,
       min: s.newServiceInfo.min,
       max: s.newServiceInfo.max,
-      avgTimeMinutes: s.newServiceInfo.avgTimeMinutes,
+      avgTime: s.newServiceInfo.avgTime,
       lastSynced: new Date()
     });
     resetState(ctx.from.id);
     await ctx.reply(
-      `✅ Service ထည့်ပြီးပါပြီ။\nHome button: ${platform.label} (key: ${platform._id})\nCategory: ${category.label}\nButton label: ${label}\nService mongo id (ဖျက်ရန် /-id သုံးမည့် id): ${service._id}`
+      `✅ Service ထည့်ပြီးပါပြီ။\nHome button: ${platform.label} (key: ${platform._id})\nCategory: ${category.label}\nButton label: ${label}\nService mongo id (ဖျက်ရန် /removeid သုံးမည့် id): ${service._id}`
     );
     return;
   }
@@ -758,7 +760,7 @@ bot.command(['removehomebutton', 'decreasehomebutton'], async (ctx) => {
   await ctx.reply(`✅ Home button "${removed.label}" ဖျက်ပြီးပါပြီ (category ${catDeleted} ခု, service ${svcDeleted} ခု အပါအဝင်)။`);
 });
 
-// Fast one-line service add (alternative to the /+id step-by-step wizard) -
+// Fast one-line service add (alternative to the /addid step-by-step wizard) -
 // creates the home button + category automatically if they don't exist yet.
 async function addServiceQuick(platformKey, categoryLabel, buttonLabel, provider, providerServiceId) {
   let platform = await Platform.findById(platformKey);
@@ -770,7 +772,7 @@ async function addServiceQuick(platformKey, categoryLabel, buttonLabel, provider
   const service = await Service.create({
     categoryId: category._id, label, provider, providerServiceId,
     providerName: info.providerName, rate: info.rate, min: info.min, max: info.max,
-    avgTimeMinutes: info.avgTimeMinutes, lastSynced: new Date()
+    avgTime: info.avgTime, lastSynced: new Date()
   });
   return { platform, category, service };
 }
@@ -818,7 +820,7 @@ bot.command(['services', 'listservices'], async (ctx) => {
   const platforms = await Platform.find({}).sort({ _id: 1 });
   const categories = await Category.find({}).sort({ platform: 1 });
   if (!platforms.length && !categories.length) {
-    return ctx.reply('😔 Home button / Category / Service ဘာမှ မရှိသေးပါ။ /addhomebutton (သို့) /+id ဖြင့် စထည့်ပါ။');
+    return ctx.reply('😔 Home button / Category / Service ဘာမှ မရှိသေးပါ။ /addhomebutton (သို့) /addid ဖြင့် စထည့်ပါ။');
   }
   const lines = ['🏠 Home buttons:'];
   if (!platforms.length) lines.push('  (မရှိသေးပါ)');
@@ -844,7 +846,7 @@ bot.command(['services', 'listservices'], async (ctx) => {
 bot.command(['-category', 'removecategory'], async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const id = ctx.message.text.split(' ')[1];
-  if (!id) return ctx.reply('ပုံစံ: /-category <categoryMongoId>\n(category ဖျက်ရင် အောက်က service အားလုံးပါ ပါ ဖျက်ပါမည်)');
+  if (!id) return ctx.reply('ပုံစံ: /removecategory <categoryMongoId>\n(category ဖျက်ရင် အောက်က service အားလုံးပါ ပါ ဖျက်ပါမည်)');
   const cat = await Category.findByIdAndDelete(id).catch(() => null);
   if (!cat) return ctx.reply('❌ Category မတွေ့ပါ။');
   const { deletedCount } = await Service.deleteMany({ categoryId: id });
@@ -857,6 +859,34 @@ bot.command(['-id', 'removeid'], async (ctx) => {
   await ctx.reply(res ? '✅ Service ဖျက်ပြီးပါပြီ။' : '❌ Service မတွေ့ပါ။');
 });
 
+// debug helper: shows exactly how a cost was derived, so if a price looks
+// wrong you can immediately see whether the raw provider rate is the
+// problem or the markup math is the problem.
+bot.command('testcost', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  const serviceId = parts[1], quantity = parseInt(parts[2], 10);
+  if (!serviceId || !quantity) return ctx.reply('ပုံစံ: /testcost <serviceMongoId> <quantity>');
+  const service = await Service.findById(serviceId).catch(() => null);
+  if (!service) return ctx.reply('❌ Service မတွေ့ပါ။');
+  try {
+    const cost = providers.calcSaleCost(service.provider, service.rate, quantity);
+    const providerCost = (service.rate / 1000) * quantity;
+    await ctx.reply(
+      `🧮 Cost breakdown\n` +
+      `Service: ${service.label} (${service.provider}#${service.providerServiceId})\n` +
+      `Stored rate (per 1000, provider's own currency): ${service.rate}\n` +
+      `Quantity: ${quantity}\n` +
+      `Provider cost for this quantity: ${providerCost.toFixed(4)} ${providers.CONFIG[service.provider].currency}\n` +
+      `Markup formula applied: ${service.provider === 'shweboost' ? `x${process.env.SHWEBOOST_MARKUP_MULTIPLIER || 2.3}` : `x${process.env.SECSERS_USD_TO_MMK || 4400} (USD→MMK) x${process.env.SECSERS_MARKUP_MULTIPLIER || 1}`}\n` +
+      `Final sale cost: ${cost} ကျပ်\n\n` +
+      `⚠️ ဒီအရေအတွက် မှားနေရင် "Stored rate" ကို ${service.provider} dashboard ထဲက service ရဲ့ rate နှင့် တိုက်စစ်ပါ - /syncservices ဖြင့် ပြန် sync လုပ်နိုင်ပါတယ်။`
+    );
+  } catch (err) {
+    await ctx.reply('❌ ' + err.message);
+  }
+});
+
 bot.command('syncservices', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const services = await Service.find({});
@@ -866,7 +896,7 @@ bot.command('syncservices', async (ctx) => {
     try {
       const info = await providers.fetchServiceInfo(svc.provider, svc.providerServiceId);
       svc.rate = info.rate; svc.min = info.min; svc.max = info.max;
-      svc.avgTimeMinutes = info.avgTimeMinutes; svc.lastSynced = new Date();
+      svc.avgTime = info.avgTime; svc.lastSynced = new Date();
       await svc.save(); ok++;
     } catch (err) { fail++; }
   }
@@ -905,7 +935,7 @@ bot.command('checkorders', async (ctx) => {
 bot.command(['-order', 'removeorder'], async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const id = ctx.message.text.split(' ')[1];
-  if (!id) return ctx.reply('ပုံစံ: /-order <orderMongoId>');
+  if (!id) return ctx.reply('ပုံစံ: /removeorder <orderMongoId>');
   const res = await Order.findByIdAndDelete(id).catch(() => null);
   await ctx.reply(res ? '✅ Order ဖျက်ပြီးပါပြီ။' : '❌ Order မတွေ့ပါ။');
 });
