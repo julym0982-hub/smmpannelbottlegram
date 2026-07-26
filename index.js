@@ -40,6 +40,43 @@ function chunk(arr, size) {
   return out;
 }
 
+// Telegram first_name/username come from the USER and are never trusted:
+// they can contain control characters, huge repeated emoji spam, markdown
+// special characters, zero-width characters, or thousands of characters.
+// This keeps every place we display "the user's name" safe and short.
+function sanitizeName(raw) {
+  if (!raw) return 'User';
+  let s = String(raw)
+    .replace(/[\u0000-\u001F\u007F\u200B-\u200F\u202A-\u202E\uFEFF]/g, '') // control/invisible/RTL-override chars
+    .trim();
+  if (!s) return 'User';
+  if (s.length > 40) s = s.slice(0, 40) + '…'; // hard cap - blocks "spam wall of text" names
+  return s;
+}
+function displayName(from) {
+  return sanitizeName(from.first_name || from.username || 'User');
+}
+// escapes legacy-Markdown special characters so a hostile name can never
+// break formatting (or worse, inject fake markdown/links) in admin views
+// that use parse_mode: 'Markdown' (e.g. /users, /userinfo)
+function escapeMarkdown(text) {
+  return String(text).replace(/([_*`\[\]])/g, '\\$1');
+}
+
+// ---------------------------------------------------------------------
+// basic per-user flood control - a burst of messages (script/spam attack)
+// gets silently throttled instead of hammering MongoDB/Telegram/provider
+// APIs on every single keystroke
+// ---------------------------------------------------------------------
+const lastMsgTimes = {};
+function isFlooding(userId) {
+  const now = Date.now();
+  const arr = (lastMsgTimes[userId] = lastMsgTimes[userId] || []).filter(t => now - t < 3000);
+  arr.push(now);
+  lastMsgTimes[userId] = arr;
+  return arr.length > 8; // more than 8 messages in 3 seconds = flooding
+}
+
 // ---------------------------------------------------------------------
 // keyboards
 // ---------------------------------------------------------------------
@@ -74,13 +111,15 @@ async function safeSend(chatId, text, extra) {
 }
 
 async function getOrCreateUser(from) {
+  const safeUsername = sanitizeName(from.username || '');
+  const safeFirstName = sanitizeName(from.first_name || '');
   let u = await User.findById(String(from.id));
   if (!u) {
-    u = await User.create({ _id: String(from.id), username: from.username || '', firstName: from.first_name || '' });
+    u = await User.create({ _id: String(from.id), username: from.username ? safeUsername : '', firstName: from.first_name ? safeFirstName : '' });
   } else {
     let changed = false;
-    if (from.username && u.username !== from.username) { u.username = from.username; changed = true; }
-    if (from.first_name && u.firstName !== from.first_name) { u.firstName = from.first_name; changed = true; }
+    if (from.username && u.username !== safeUsername) { u.username = safeUsername; changed = true; }
+    if (from.first_name && u.firstName !== safeFirstName) { u.firstName = safeFirstName; changed = true; }
     if (changed) await u.save();
   }
   return u;
@@ -92,6 +131,18 @@ async function getOrCreateUser(from) {
 bot.use(async (ctx, next) => {
   try {
     if (ctx.from) {
+      // flood/spam protection - a burst of rapid messages (bot/script
+      // attack, or accidental double-tapping) gets silently dropped instead
+      // of hammering MongoDB and the provider APIs on every message
+      if (!isAdmin(ctx.from.id) && isFlooding(ctx.from.id)) return;
+
+      // hard cap on incoming text length - defends against someone pasting
+      // megabytes of text/code (attempted injection, log-spam, or just an
+      // accidental huge paste) into any text field the bot reads
+      if (ctx.message && typeof ctx.message.text === 'string' && ctx.message.text.length > 2000) {
+        return ctx.reply('⚠️ Message အရမ်းရှည်နေပါတယ်၊ ပိုတိုတိုလေး ပို့ပေးပါရှင့်။');
+      }
+
       const u = await getOrCreateUser(ctx.from);
       if (u.banned && !isAdmin(ctx.from.id)) return ctx.reply(texts.t('banned'));
       ctx.dbUser = u;
@@ -232,7 +283,7 @@ async function sendAdminGuide(ctx) {
 
 bot.start(async (ctx) => {
   resetState(ctx.from.id);
-  const name = ctx.from.first_name || ctx.from.username || 'User';
+  const name = displayName(ctx.from);
   await ctx.reply(texts.t('welcome', { name }), await mainMenuKeyboard());
   if (isAdmin(ctx.from.id)) await sendAdminGuide(ctx);
 });
@@ -265,7 +316,7 @@ bot.hears(BTN_BACK, async (ctx) => {
 bot.hears(BTN_SERVICES, async (ctx) => { resetState(ctx.from.id); st(ctx.from.id).level = 'platform'; await showPlatformMenu(ctx); });
 
 bot.hears(BTN_BALANCE, async (ctx) => {
-  const name = ctx.from.first_name || ctx.from.username || 'User';
+  const name = displayName(ctx.from);
   await ctx.reply(
     texts.t('balance_msg', { name, balance: ctx.dbUser.balance }),
     Markup.inlineKeyboard([[Markup.button.callback('ငွေထည့်ရန်', 'go_topup')]])
@@ -621,7 +672,7 @@ bot.action('place_order', async (ctx) => {
 
   if (user.balance < s.cost) {
     resetState(ctx.from.id);
-    const name = ctx.from.first_name || ctx.from.username || 'User';
+    const name = displayName(ctx.from);
     return ctx.reply(
       texts.t('insufficient_balance', { name }),
       Markup.inlineKeyboard([[Markup.button.callback('💰ငွေဖြည့်ရန်💰', 'go_topup')]])
@@ -732,7 +783,7 @@ bot.action(/^cancel_order_([0-9a-fA-F]{24})$/, async (ctx) => {
     // the provider actually cancelled it - see refreshOrderStatuses above.
     const submitted = await providers.cancelOrder(order.provider, order.providerOrderId);
     if (submitted) {
-      await ctx.reply('🕐 Cancel request တင်ပြီးပါပြီရှင့်။ Provider ဆီက အတည်ပြုပြီးမှသာ cashback ပြန်ပေးပါမည် (မိနစ်အနည်းငယ် စောင့်ပေးပါ) ❤️');
+      await ctx.reply('🕐 Cancel request တင်ပြီးပါပြီရှင့်။ cancel တာအောင်မြင်တာနဲ့ cashback ပြန်ပေးပါမည် (မိနစ်အနည်းငယ် စောင့်ပေးပါနော်) ❤️');
     } else {
       await ctx.reply(texts.t('order_cancel_fail'));
     }
@@ -808,9 +859,10 @@ bot.command('users', async (ctx) => {
   const total = await User.countDocuments();
   const users = await User.find({}).sort({ createdAt: -1 }).skip((page - 1) * perPage).limit(perPage);
   if (!users.length) return ctx.reply('User မရှိပါ။');
-  const lines = users.map(u =>
-    `👤 [${u.firstName || u.username || u._id}](tg://user?id=${u._id})\nID: ${u._id} | Balance: ${u.balance} | Spent: ${u.totalSpent || 0}${u.banned ? ' | 🚫banned' : ''}`
-  );
+  const lines = users.map(u => {
+    const label = escapeMarkdown(sanitizeName(u.firstName || u.username || u._id));
+    return `👤 [${label}](tg://user?id=${u._id})\nID: ${u._id} | Balance: ${u.balance} | Spent: ${u.totalSpent || 0}${u.banned ? ' | 🚫banned' : ''}`;
+  });
   const totalPages = Math.ceil(total / perPage);
   await ctx.replyWithMarkdown(`👥 Users - page ${page}/${totalPages}\n\n` + lines.join('\n\n'));
 });
@@ -823,11 +875,13 @@ bot.command('userinfo', async (ctx) => {
   if (!u) return ctx.reply('User မတွေ့ပါ။');
   const orders = await Order.find({ userId: id }).sort({ createdAt: -1 }).limit(5);
   const orderLines = orders.length
-    ? orders.map(o => `- #${o._id.toString().slice(-6)} ${o.link} (${o.status})`).join('\n')
+    ? orders.map(o => `- #${o._id.toString().slice(-6)} ${escapeMarkdown(o.link)} (${o.status})`).join('\n')
     : 'Order မရှိသေးပါ';
+  const label = escapeMarkdown(sanitizeName(u.firstName || u.username || u._id));
+  const usernameSafe = escapeMarkdown(u.username || '-');
   await ctx.replyWithMarkdown(
-    `👤 [${u.firstName || u.username || u._id}](tg://user?id=${u._id})\n` +
-    `ID: ${u._id}\nUsername: @${u.username || '-'}\nBalance: ${u.balance}\nTotal spent: ${u.totalSpent || 0}\nBanned: ${u.banned}\n\n` +
+    `👤 [${label}](tg://user?id=${u._id})\n` +
+    `ID: ${u._id}\nUsername: @${usernameSafe}\nBalance: ${u.balance}\nTotal spent: ${u.totalSpent || 0}\nBanned: ${u.banned}\n\n` +
     `Recent orders:\n${orderLines}`
   );
 });
@@ -1093,7 +1147,7 @@ bot.command('checkorders', async (ctx) => {
   if (!orders.length) return ctx.reply('Order များ မရှိသေးပါ။');
   const lines = await Promise.all(orders.map(async o => {
     const u = await User.findById(o.userId);
-    const name = u ? (u.firstName || u.username || o.userId) : o.userId;
+    const name = u ? sanitizeName(u.firstName || u.username || o.userId) : o.userId;
     return `#${o._id.toString().slice(-6)} | ${name} | ${o.categoryLabel || ''} ${o.serviceLabel || ''} | ${o.cost} ကျပ် | ${o.status}`;
   }));
   await ctx.reply('📋 Orders (နောက်ဆုံး 30):\n\n' + lines.join('\n'));
