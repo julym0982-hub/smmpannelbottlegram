@@ -28,6 +28,8 @@ const DEFAULTS = {
   shweboost_markup: process.env.SHWEBOOST_MARKUP_MULTIPLIER || '2.3',
   secsers_usd_to_mmk: process.env.SECSERS_USD_TO_MMK || '4400',
   secsers_markup: process.env.SECSERS_MARKUP_MULTIPLIER || '1',
+  hiroshi_usd_to_mmk: process.env.HIROSHI_USD_TO_MMK || '4400',
+  hiroshi_markup: process.env.HIROSHI_MARKUP_MULTIPLIER || '2.3',
   topup_min: 'အနည်းဆုံး ${min} ကျပ်မှ စဖြည့်ပါရှင့် ❤️',
   topup_below_min: 'အနည်းဆုံး ${min}ကျပ်မှ ငွေစသွင်းပါရှင့်♥️',
   topup_ask_screenshot: 'ဆီသို့ ငွေလွှဲပြီး screenshot ပို့ပေးပါရှင့်',

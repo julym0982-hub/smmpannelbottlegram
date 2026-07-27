@@ -37,7 +37,7 @@ CategorySchema.index({ platform: 1, label: 1 });
 const ServiceSchema = new mongoose.Schema({
   categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true, index: true },
   label: { type: String, required: true },       // button text, e.g. "♥️" or "👍♥️🔥😁🎉 +Views"
-  provider: { type: String, enum: ['shweboost', 'secsers'], required: true },
+  provider: { type: String, enum: ['shweboost', 'secsers', 'hiroshi'], required: true },
   providerServiceId: { type: String, required: true },
   // cached from the provider's "services" API endpoint so we don't have to
   // call it on every single order (refreshed by /syncservices)

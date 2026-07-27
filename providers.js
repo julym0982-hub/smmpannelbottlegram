@@ -29,6 +29,16 @@ const CONFIG = {
       providerCostUSD *
       Number(texts.t('secsers_usd_to_mmk')) *
       Number(texts.t('secsers_markup'))
+  },
+  hiroshi: {
+    url: process.env.HIROSHI_API_URL,
+    key: process.env.HIROSHI_API_KEY,
+    currency: 'USD',
+    // Hiroshi is the same Perfect-Panel API shape as the others, also USD
+    toSaleCost: (providerCostUSD) =>
+      providerCostUSD *
+      Number(texts.t('hiroshi_usd_to_mmk')) *
+      Number(texts.t('hiroshi_markup'))
   }
 };
 

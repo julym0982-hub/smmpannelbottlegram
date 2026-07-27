@@ -197,6 +197,7 @@ Home button ထဲကို service (ဥပမာ ♥️,👍 reaction emoji, �
 /addbutton telegram|Reaction တိုးရန်❤️|👍|shweboost|1235
 /addbutton telegram|Views တိုးရန်👀|-|shweboost|5678
 /addbutton tiktok|Tiktok like👍|-|secsers|9001
+/addbutton telegram|Reaction တိုးရန်❤️|🔥|hiroshi|42
 
 - category_label တူတူ ထပ်ရေးရင် category တစ်ခုထဲကို service အများကြီး ပေါင်းထည့်ပေးမည် (ဥပမာ ♥️,👍,🔥 အားလုံး "Reaction တိုးရန်❤️" ထဲ ရောက်မည်)
 - category ထဲ service **တစ်ခုတည်း** ရှိရင် (ဥပမာ Views) user က category ကို နှိပ်တာနဲ့ တန်းပြီး link တောင်းမည်
@@ -217,7 +218,7 @@ Home button ထဲကို service (ဥပမာ ♥️,👍 reaction emoji, �
 /syncservices - service အားလုံးရဲ့ rate/min/max ကို provider API မှ ပြန်ဆွဲ update လုပ်မည် (provider ဘက်က ဈေးနှုန်း ပြောင်းနိုင်လို့ ရံဖန်ရံခါ run ပေးရင် ကောင်းပါတယ်)
 
 **ဈေးနှုန်း formula ကို bot ထဲကနေ ချက်ချင်း ပြောင်းရန်** (Render env var ပြင်စရာ၊ redeploy လုပ်စရာ မလိုပါ):
-/setrate <shweboost|secsers> <USD→MMK rate> <markup>
+/setrate <shweboost|secsers|hiroshi> <USD→MMK rate> <markup>
 ဥပမာ: /setrate shweboost 2100 2.3
    (ShweBoost က $1 ကို 2100 ကျပ်နှုန်းဖြင့် တွက်ပြီး 2.3 ဆ ထပ်မြှောက်မည် — ဆိုလိုသည်မှာ user ဆီ ပြမည့် ကျသင့်ငွေ = USD ကုန်ကျစရိတ် × 2100 × 2.3)
 ဥပမာ: /setrate secsers 4400 1
@@ -569,12 +570,12 @@ bot.on('text', async (ctx, next) => {
   if (s.level === 'admin_addid_category' && isAdmin(ctx.from.id)) {
     s.newCategoryLabel = text;
     s.level = 'admin_addid_provider';
-    await ctx.reply('Provider ကို ရေးပါ: shweboost သို့မဟုတ် secsers');
+    await ctx.reply('Provider ကို ရေးပါ: shweboost, secsers, hiroshi တစ်ခုခု');
     return;
   }
   if (s.level === 'admin_addid_provider' && isAdmin(ctx.from.id)) {
     const provider = text.toLowerCase();
-    if (!['shweboost', 'secsers'].includes(provider)) return ctx.reply('shweboost သို့မဟုတ် secsers ဟုသာ ရေးပါ။');
+    if (!['shweboost', 'secsers', 'hiroshi'].includes(provider)) return ctx.reply('shweboost, secsers, hiroshi တစ်ခုခုကိုသာ ရေးပါ။');
     s.newProvider = provider;
     s.level = 'admin_addid_serviceid';
     await ctx.reply(`${provider} ဝဘ်ဆိုက်ထဲက ဝယ်လိုသော service ရဲ့ provider service id ကို ရေးပါ`);
@@ -1013,8 +1014,8 @@ bot.command(['addbutton', 'addservice'], async (ctx) => {
     );
   }
   const [platformKey, categoryLabel, buttonLabel, provider, providerServiceId] = parts;
-  if (!['shweboost', 'secsers'].includes(provider.toLowerCase())) {
-    return ctx.reply('❌ provider ကို shweboost သို့မဟုတ် secsers ဟုသာ ရေးပါ။');
+  if (!['shweboost', 'secsers', 'hiroshi'].includes(provider.toLowerCase())) {
+    return ctx.reply('❌ provider ကို shweboost, secsers, hiroshi တစ်ခုခုကိုသာ ရေးပါ။');
   }
   try {
     const { service, category, platform } = await addServiceQuick(
@@ -1145,7 +1146,7 @@ bot.command('syncservices', async (ctx) => {
 bot.command('providerbalance', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const lines = [];
-  for (const provider of ['shweboost', 'secsers']) {
+  for (const provider of ['shweboost', 'secsers', 'hiroshi']) {
     try {
       const res = await providers.getBalance(provider);
       lines.push(`${provider}: ${res.balance} ${res.currency || ''}`);
@@ -1221,13 +1222,15 @@ bot.command('setrate', async (ctx) => {
   const provider = (parts[1] || '').toLowerCase();
   const usdToMmk = parts[2];
   const markup = parts[3];
-  if (!['shweboost', 'secsers'].includes(provider) || !usdToMmk || !markup) {
+  if (!['shweboost', 'secsers', 'hiroshi'].includes(provider) || !usdToMmk || !markup) {
     return ctx.reply(
-      'ပုံစံ: /setrate <shweboost|secsers> <USD→MMK rate> <markup>\n\n' +
+      'ပုံစံ: /setrate <shweboost|secsers|hiroshi> <USD→MMK rate> <markup>\n\n' +
       'ဥပမာ (ShweBoost က $1 ကို 2100 ကျပ်နှုန်းဖြင့် တွက်ပြီး 2.3 ဆ markup တင်လိုရင်):\n' +
       '/setrate shweboost 2100 2.3\n\n' +
       'ဥပမာ (Secsers က $1=4400ကျပ်, markup မတင်လိုရင်):\n' +
       '/setrate secsers 4400 1\n\n' +
+      'ဥပမာ (Hiroshi):\n' +
+      '/setrate hiroshi 4400 2.3\n\n' +
       'ဖော်မြူလာ: ကျသင့်ငွေ = provider ရဲ့ USD ကုန်ကျစရိတ် × <USD→MMK rate> × <markup>'
     );
   }
