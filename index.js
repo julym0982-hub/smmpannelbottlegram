@@ -264,6 +264,12 @@ Home button ထဲကို service (ဥပမာ ♥️,👍 reaction emoji, �
 /cuponcode <amount> <count> [code]
 ဥပမာ: /cuponcode 100 5 (100 ကျပ်တန်း coupon ကို ၅ ယောက်စာ အသုံးပြုနိုင်အောင် random code ထုတ်မည်)
 ဥပမာ (code ကိုယ်တိုင်ပေးလိုရင်): /cuponcode 100 5 WELCOME100
+⚠️ Code တစ်ခုကို user တစ်ယောက်စီက **တစ်ကြိမ်သာ** အသုံးပြုနိုင်ပါသည် (ထပ်ရေးရင် "အသုံးပြုပြီးပါပြီ" ဟု ငြင်းပယ်မည်)
+
+**Coupon ကို ဘယ်နှစ်ယောက် သုံးထားလဲ / ဘယ်သူတွေ သုံးထားလဲ ကြည့်ရန်**:
+/couponinfo <code>
+ဥပမာ: /couponinfo WELCOME100
+(ဒါက ထုတ်ထားသောစုစုပေါင်း၊ သုံးပြီးသားအရေအတွက်၊ ကျန်ရှိအရေအတွက်၊ ပြီးသုံးထားသူများ၏ နာမည်+id list ကို ပြပေးမည်)
 
 **Main menu ထဲ button အသစ် ထည့်ရန်** (ဥပမာ - "Contact Admin" နှိပ်ရင် admin ရဲ့ Telegram chat ကို ရောက်စေရန်):
 /addmenubutton ☎️ Contact Admin|https://t.me/YourAdminUsername
@@ -498,9 +504,14 @@ bot.on('text', async (ctx, next) => {
   if (s.level === 'coupon') {
     resetState(ctx.from.id);
     const code = text.toUpperCase();
+    const userId = String(ctx.from.id);
     const coupon = await Coupon.findById(code);
-    if (!coupon || coupon.remaining <= 0) return ctx.reply('❌ Cupon code မှားနေပါသည် သို့မဟုတ် ကုန်သွားပါပြီရှင့်။');
-    coupon.remaining -= 1; await coupon.save();
+    if (!coupon) return ctx.reply('❌ Cupon code မှားနေပါသည်ရှင့်။');
+    if (coupon.usedBy.includes(userId)) return ctx.reply('❌ ဒီ Cupon code ကို ခင်ဗျား အသုံးပြုပြီးပါပြီရှင့် - တစ်ယောက်ကို တစ်ကြိမ်သာ အသုံးပြုနိုင်ပါသည်။');
+    if (coupon.remaining <= 0) return ctx.reply('❌ ဒီ Cupon code ကို သတ်မှတ်ထားသော ကန့်သတ်ချက် ပြည့်သွားပါပြီရှင့်။');
+    coupon.remaining -= 1;
+    coupon.usedBy.push(userId);
+    await coupon.save();
     ctx.dbUser.balance += coupon.amount; await ctx.dbUser.save();
     return ctx.reply(`🎉 Cupon code အောင်မြင်ပါသည်! သင့်အကောင့်ထဲသို့ ${coupon.amount} ကျပ် ထည့်ပေးလိုက်ပါပြီရှင့်။`);
   }
@@ -1210,7 +1221,33 @@ bot.command('cuponcode', async (ctx) => {
   if (!amount || !count) return ctx.reply('ပုံစံ: /cuponcode <amount> <count> [custom_code]');
   code = code ? code.toUpperCase() : 'SMM' + Math.random().toString(36).slice(2, 8).toUpperCase();
   await Coupon.findByIdAndUpdate(code, { _id: code, amount, remaining: count }, { upsert: true });
-  await ctx.reply(`🎁 Cupon code ထုတ်ပြီးပါပြီ။\n\nCode: ${code}\nတန်ဖိုး: ${amount} ကျပ်\nအသုံးပြုနိုင်သူ: ${count} ယောက်`);
+  await ctx.reply(`🎁 Cupon code ထုတ်ပြီးပါပြီ။\n\nCode: ${code}\nတန်ဖိုး: ${amount} ကျပ်\nအသုံးပြုနိုင်သူ: ${count} ယောက်\n\n(တစ်ယောက်ချင်းစီ ဒီ code ကို တစ်ကြိမ်သာ အသုံးပြုနိုင်ပါသည်)`);
+});
+
+bot.command('couponinfo', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const code = (ctx.message.text.split(' ')[1] || '').toUpperCase();
+  if (!code) return ctx.reply('ပုံစံ: /couponinfo <code>');
+  const coupon = await Coupon.findById(code);
+  if (!coupon) return ctx.reply('❌ ဒီ code ကို ရှာမတွေ့ပါ။');
+  const totalIssued = coupon.remaining + coupon.usedBy.length;
+  let usedLines = 'သုံးသေးသူ မရှိပါ။';
+  if (coupon.usedBy.length) {
+    const users = await User.find({ _id: { $in: coupon.usedBy } }).lean();
+    usedLines = coupon.usedBy.map(id => {
+      const u = users.find(x => x._id === id);
+      const label = u ? sanitizeName(u.firstName || u.username || id) : id;
+      return `- ${label} (id: ${id})`;
+    }).join('\n');
+  }
+  await ctx.reply(
+    `🎁 Coupon: ${code}\n` +
+    `တန်ဖိုး: ${coupon.amount} ကျပ်\n` +
+    `ထုတ်ထားသော စုစုပေါင်း: ${totalIssued} ယောက်စာ\n` +
+    `သုံးပြီးသား: ${coupon.usedBy.length} ယောက်\n` +
+    `ကျန်ရှိ: ${coupon.remaining} ယောက်စာ\n\n` +
+    `အသုံးပြုပြီးသူများ:\n${usedLines}`
+  );
 });
 
 // =======================================================================

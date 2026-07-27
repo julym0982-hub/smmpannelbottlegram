@@ -82,6 +82,7 @@ const CouponSchema = new mongoose.Schema({
   _id: { type: String }, // the code itself
   amount: Number,
   remaining: Number,
+  usedBy: { type: [String], default: [] }, // telegram user ids that already redeemed this code - each person can only use a given code ONCE
   createdAt: { type: Date, default: Date.now }
 });
 
