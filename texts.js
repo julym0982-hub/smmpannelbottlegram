@@ -21,7 +21,15 @@ const DEFAULTS = {
   order_complete: '${link} ဝယ်ယူထားတဲ့ ${service} type က complete ဖြစ်သွားပါပြီရှင့်\nဝယ်ယူမှုအတွက် ကျေးဇူးတင်ပါတယ်ရှင့် ❤️',
   order_cancel_success: '✅ Order ကို cancel လုပ်ပြီး cashback ${cost} ကျပ် ပြန်ထည့်ပေးလိုက်ပါပြီရှင့်',
   order_cancel_fail: 'Order ဆောင်ရွက်လျက်ရှိပါတယ်ရှင့်၊ cancel လုပ်၍ မရတော့ပါ',
-  topup_min: 'အနည်းဆုံး 1000 ကျပ်မှ စဖြည့်ပါရှင့် ❤️',
+  topup_min_amount: process.env.TOPUP_MIN_AMOUNT || '1000', // plain number, not a template
+  // provider pricing knobs - plain numbers, not templates. Changeable live
+  // via /setrate without touching Render's environment variables at all.
+  shweboost_usd_to_mmk: process.env.SHWEBOOST_USD_TO_MMK || '4400',
+  shweboost_markup: process.env.SHWEBOOST_MARKUP_MULTIPLIER || '2.3',
+  secsers_usd_to_mmk: process.env.SECSERS_USD_TO_MMK || '4400',
+  secsers_markup: process.env.SECSERS_MARKUP_MULTIPLIER || '1',
+  topup_min: 'အနည်းဆုံး ${min} ကျပ်မှ စဖြည့်ပါရှင့် ❤️',
+  topup_below_min: 'အနည်းဆုံး ${min}ကျပ်မှ ငွေစသွင်းပါရှင့်♥️',
   topup_ask_screenshot: 'ဆီသို့ ငွေလွှဲပြီး screenshot ပို့ပေးပါရှင့်',
   topup_ask_amount: 'ငွေထည့်ထားတဲ့ ပမာဏလေး ရေးပေးပါရှင့် ❤️',
   topup_submitted: 'Admin သို့ ငွေလွှဲထားကြောင်း တင်ပြပေးထားပါတယ်ရှင့် 😊\nခေတ္တခဏ စောင့်ပေးပါနော်',

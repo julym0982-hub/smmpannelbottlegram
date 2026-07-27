@@ -76,6 +76,10 @@ npm start
 3. Network Access ထဲမှာ `0.0.0.0/0` ကို allow လုပ်ပါ (Render ကနေ ဝင်လို့ရအောင်)
 4. "Connect" → "Drivers" ကနေ connection string ကို copy ကူးပြီး `.env` ရဲ့ `MONGODB_URI` ထဲ ထည့်ပါ
 
+**Storage limit (Free M0 = 512MB) စောင့်ကြည့်ရန်**: Atlas dashboard ထဲက cluster ကို ကြည့်ရင် "Storage Used" ကို မြင်ရပါမယ်။ User/order အရေအတွက် တိုးလာတာနှင့်အမျှ space ကို လေးလေးနက်နက် စောင့်ကြည့်ပါ (Order collection က အများဆုံး ကြီးလာမည့် collection ဖြစ်ပါလိမ့်မယ်)။ ပြည့်တော့မယ်ဆိုရင်:
+- `/checkorders` output ကို ကြည့်ပြီး `completed`/`cancelled` ဖြစ်ပြီးတာကြာနေတဲ့ order (ဥပမာ ၃ လကျော်) အဟောင်းများကို `/removeorder <id>` ဖြင့် archive/ဖျက်နိုင်ပါတယ်
+- သို့မဟုတ် cluster အသစ် (Atlas M0 ထပ်ဆောက်) တစ်ခုကို `MONGODB_URI` ပြောင်းသုံးပြီး data အသစ်များကို ဒီထဲ ထည့်နိုင်ပါတယ် (data ဟောင်းရော အသစ်ရော ခွဲသိမ်းလိုရင် code ထဲမှာ connection ၂ ခု ခွဲထားရန် ထပ်ပြင်ပေးနိုင်ပါတယ် - အခုတော့ တစ်ခုတည်းနဲ့ ရိုးရိုးထားထားပါတယ်)
+
 ## Deploy on Render
 
 1. GitHub repo အသစ်ဆောက်ပြီး ဒီ folder ကို push လုပ်ပါ

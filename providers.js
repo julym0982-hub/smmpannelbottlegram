@@ -1,4 +1,5 @@
 const axios = require('axios');
+const texts = require('./texts');
 
 // Both ShweBoost and Secsers (like almost every SMM reseller panel) expose
 // the same "Perfect Panel" style API: one endpoint, an `action` field picks
@@ -11,11 +12,13 @@ const CONFIG = {
     key: process.env.SHWEBOOST_API_KEY,
     currency: 'USD',
     // ShweBoost's own API quotes rate/balance/order-status in USD (confirmed
-    // from their API docs) - convert to MMK, then mark up
+    // from their API docs) - convert to MMK, then mark up. Rates are read
+    // live from texts.js so admin can change them with /setrate, no
+    // redeploy or env var editing needed.
     toSaleCost: (providerCostUSD) =>
       providerCostUSD *
-      Number(process.env.SHWEBOOST_USD_TO_MMK || 4400) *
-      Number(process.env.SHWEBOOST_MARKUP_MULTIPLIER || 2.3)
+      Number(texts.t('shweboost_usd_to_mmk')) *
+      Number(texts.t('shweboost_markup'))
   },
   secsers: {
     url: process.env.SECSERS_API_URL,
@@ -24,8 +27,8 @@ const CONFIG = {
     // Secsers also quotes in USD - convert to MMK, then mark up
     toSaleCost: (providerCostUSD) =>
       providerCostUSD *
-      Number(process.env.SECSERS_USD_TO_MMK || 4400) *
-      Number(process.env.SECSERS_MARKUP_MULTIPLIER || 1)
+      Number(texts.t('secsers_usd_to_mmk')) *
+      Number(texts.t('secsers_markup'))
   }
 };
 

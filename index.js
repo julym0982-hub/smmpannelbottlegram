@@ -216,6 +216,12 @@ Home button ထဲကို service (ဥပမာ ♥️,👍 reaction emoji, �
 
 /syncservices - service အားလုံးရဲ့ rate/min/max ကို provider API မှ ပြန်ဆွဲ update လုပ်မည် (provider ဘက်က ဈေးနှုန်း ပြောင်းနိုင်လို့ ရံဖန်ရံခါ run ပေးရင် ကောင်းပါတယ်)
 
+**ဈေးနှုန်း formula ကို bot ထဲကနေ ချက်ချင်း ပြောင်းရန်** (Render env var ပြင်စရာ၊ redeploy လုပ်စရာ မလိုပါ):
+/setrate <shweboost|secsers> <USD→MMK rate> <markup>
+ဥပမာ: /setrate shweboost 2100 2.3
+   (ShweBoost က $1 ကို 2100 ကျပ်နှုန်းဖြင့် တွက်ပြီး 2.3 ဆ ထပ်မြှောက်မည် — ဆိုလိုသည်မှာ user ဆီ ပြမည့် ကျသင့်ငွေ = USD ကုန်ကျစရိတ် × 2100 × 2.3)
+ဥပမာ: /setrate secsers 4400 1
+
 /testcost <serviceMongoId> <quantity> - user ဆီ ပြမည့် ဈေးနှုန်း တွက်ချက်ပုံ (rate, USD→MMK conversion, markup) အသေးစိတ် ပြပေးမည် - ဈေးနှုန်း မှန်မမှန် စစ်ဖို့ အသုံးဝင်ပါတယ်
 
 /setduration <serviceMongoId> <text> - ကြာချိန် manual ရေးထည့်ရန်
@@ -227,6 +233,10 @@ Home button ထဲကို service (ဥပမာ ♥️,👍 reaction emoji, �
 **Kpay/Wave number ပြောင်းရန်** (redeploy မလိုပါ, ချက်ချင်း update ဖြစ်မည်):
 /setkpay 09123456789 Nan Su
 /setwave 09123456789 Nan Su
+
+**ငွေဖြည့်ရန် အနည်းဆုံးပမာဏ ပြောင်းရန်** (default 1000 ကျပ်):
+/settopupmin 1500
+(ဒါလုပ်ရင် user မလုံလောက်တဲ့ ပမာဏ ရေးရင် "အနည်းဆုံး 1500ကျပ်မှ ငွေစသွင်းပါရှင့်" လို့ ငြင်းပယ်ပြီး ပြန်ရေးခိုင်းမည်)
 
 **User management**:
 /ban 123456789 - user ကို ပိတ်မည်
@@ -329,20 +339,22 @@ bot.hears(BTN_HISTORY, async (ctx) => {
   const orders = await Order.find({ userId: String(ctx.from.id) }).sort({ createdAt: -1 }).limit(10);
   if (!orders.length) return ctx.reply('📜 Order မှတ်တမ်း မရှိသေးပါရှင့်။');
   await refreshOrderStatuses(orders).catch(err => console.error('refresh error', err.message));
-  for (const o of orders) {
-    const lines = [
-      `#${o._id.toString().slice(-6)} | ${o.categoryLabel || ''} ${o.serviceLabel || ''}`,
-      `Link: ${o.link}`,
-      `တိုးမည့်အရေအတွက်: ${o.quantity}`,
-      `မတိုးခင် count: ${o.startCount != null ? o.startCount : '-'}`,
-      `တိုးရန်ကျန်ရှိ: ${o.remains != null ? o.remains : '-'}`,
-      `ကုန်ကျငွေ: ${o.cost} ကျပ်`,
-      `Status: ${o.status}`
-    ];
+
+  const lines = ['📜 Order History (နောက်ဆုံး 10 ခု)\n'];
+  const cancelButtons = [];
+  orders.forEach((o, i) => {
+    const shortId = o._id.toString().slice(-6);
+    lines.push(
+      `${i + 1}) #${shortId} — ${o.categoryLabel || ''} ${o.serviceLabel || ''}\n` +
+      `   Qty: ${o.quantity} | ကုန်ကျ: ${o.cost} ကျပ် | Status: ${o.status}` +
+      (o.remains != null ? ` | ကျန်: ${o.remains}` : '')
+    );
     const cancellable = ['pending', 'in progress', 'processing'].includes(String(o.status).toLowerCase());
-    const kb = cancellable ? Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel Order', `cancel_order_${o._id}`)]]) : undefined;
-    await ctx.reply(lines.join('\n'), kb);
-  }
+    if (cancellable) cancelButtons.push([Markup.button.callback(`❌ Cancel #${shortId}`, `cancel_order_${o._id}`)]);
+  });
+
+  const kb = cancelButtons.length ? Markup.inlineKeyboard(cancelButtons) : undefined;
+  await ctx.reply(lines.join('\n\n'), kb);
 });
 
 bot.hears(BTN_COUPON, async (ctx) => { st(ctx.from.id).level = 'coupon'; await ctx.reply('🎁 Cupon code ကို ရိုက်ထည့်ပေးပါရှင့်'); });
@@ -351,7 +363,7 @@ bot.hears(BTN_COUPON, async (ctx) => { st(ctx.from.id).level = 'coupon'; await c
 // Platform -> Category -> Service navigation (bottom keyboard, scrollable)
 // =======================================================================
 async function showPlatformMenu(ctx) {
-  const platforms = await Platform.find({}).sort({ _id: 1 });
+  const platforms = await Platform.find({}).sort({ _id: 1 }).lean();
   if (!platforms.length) {
     return ctx.reply(isAdmin(ctx.from.id)
       ? '😔 Home button တစ်ခုမှ မထည့်ရသေးပါ။ Admin က /addhomebutton ဖြင့် စထည့်နိုင်ပါတယ်။'
@@ -364,7 +376,7 @@ async function showPlatformMenu(ctx) {
 }
 
 async function showCategoryMenu(ctx, platform) {
-  const cats = await Category.find({ platform });
+  const cats = await Category.find({ platform }).lean();
   if (!cats.length) {
     return ctx.reply(isAdmin(ctx.from.id)
       ? `😔 "${platform}" အတွက် category မထည့်ရသေးပါ။ Admin က /addid (သို့) /addbutton ဖြင့် ထည့်နိုင်ပါတယ်။`
@@ -497,8 +509,12 @@ bot.on('text', async (ctx, next) => {
     if (MYANMAR_DIGITS.test(text)) return ctx.reply('မြန်မာလို ၁၂၃၄၅၆၇၈၉၀ ဂဏန်းတွေ ရေးရင်လည်း English လိုဘဲ ရေးပေးပါရှင့် 😊');
     if (!/^[0-9]+$/.test(text)) return ctx.reply('ငွေလွှဲထားတဲ့ ဂဏန်းနံပါတ်လေးကို English လိုဘဲ ရေးပေးပါရှင့် 😊');
     const amount = parseInt(text, 10);
+    const minAmount = parseInt(texts.t('topup_min_amount'), 10) || 1000;
+    if (amount < minAmount) {
+      return ctx.reply(texts.t('topup_below_min', { min: minAmount })); // stays on this step so they can retype
+    }
     s.amount = amount; s.level = 'root';
-    const caption = `🧾 ငွေဖြည့်တောင်းဆိုမှု\nUser: ${ctx.from.first_name || ''} (@${ctx.from.username || '-'})\nUser ID: ${ctx.from.id}\nနည်းလမ်း: ${s.method || '-'}\nပမာဏ: ${amount} ကျပ်`;
+    const caption = `🧾 ငွေဖြည့်တောင်းဆိုမှု\nUser: ${displayName(ctx.from)} (@${ctx.from.username || '-'})\nUser ID: ${ctx.from.id}\nနည်းလမ်း: ${s.method || '-'}\nပမာဏ: ${amount} ကျပ်`;
     for (const adminId of ADMIN_IDS) {
       try {
         await bot.telegram.sendPhoto(adminId, s.screenshotFileId, {
@@ -622,12 +638,12 @@ bot.action('go_topup', async (ctx) => { await ctx.answerCbQuery(); await ctx.rep
 bot.action('topup_kpay', async (ctx) => {
   await ctx.answerCbQuery();
   const s = st(ctx.from.id); s.method = 'KPay'; s.level = 'topup_screenshot';
-  await ctx.reply(`${texts.t('topup_min')}\n\nkpay - ${texts.t('kpay_number')}\nname - ${texts.t('kpay_name')}\n\n${texts.t('topup_ask_screenshot')}`);
+  await ctx.reply(`${texts.t('topup_min', { min: texts.t('topup_min_amount') })}\n\nkpay - ${texts.t('kpay_number')}\nname - ${texts.t('kpay_name')}\n\n${texts.t('topup_ask_screenshot')}`);
 });
 bot.action('topup_wave', async (ctx) => {
   await ctx.answerCbQuery();
   const s = st(ctx.from.id); s.method = 'Wave'; s.level = 'topup_screenshot';
-  await ctx.reply(`${texts.t('topup_min')}\n\nWave - ${texts.t('wave_number')}\nName - ${texts.t('wave_name')}\n\n${texts.t('topup_ask_screenshot')}`);
+  await ctx.reply(`${texts.t('topup_min', { min: texts.t('topup_min_amount') })}\n\nWave - ${texts.t('wave_number')}\nName - ${texts.t('wave_name')}\n\n${texts.t('topup_ask_screenshot')}`);
 });
 
 bot.on('photo', async (ctx) => {
@@ -807,13 +823,15 @@ async function backgroundStatusSweep() {
     console.error('backgroundStatusSweep error:', err.message);
   }
 }
-setInterval(() => { backgroundStatusSweep(); }, 5 * 60 * 1000);
+setInterval(() => { backgroundStatusSweep(); }, 2 * 60 * 1000);
 
 // =======================================================================
 // Admin: user/ban/money commands
 // =======================================================================
 function requireAdmin(ctx) {
-  if (!isAdmin(ctx.from.id)) { ctx.reply('❌ ဒီ command ကို Admin သာ အသုံးပြုနိုင်ပါသည်။'); return false; }
+  // silently ignore for non-admins - we never want to confirm to a random
+  // user that "/ban", "/addmoney" etc are even valid admin commands
+  if (!isAdmin(ctx.from.id)) return false;
   return true;
 }
 
@@ -1020,7 +1038,7 @@ bot.command(['+id', 'addid'], async (ctx) => {
 
 bot.command(['services', 'listservices'], async (ctx) => {
   if (!requireAdmin(ctx)) return;
-  const platforms = await Platform.find({}).sort({ _id: 1 });
+  const platforms = await Platform.find({}).sort({ _id: 1 }).lean();
   const categories = await Category.find({}).sort({ platform: 1 });
   if (!platforms.length && !categories.length) {
     return ctx.reply('😔 Home button / Category / Service ဘာမှ မရှိသေးပါ။ /addhomebutton (သို့) /addid ဖြင့် စထည့်ပါ။');
@@ -1099,7 +1117,7 @@ bot.command('testcost', async (ctx) => {
       `Stored rate (per 1000, provider's own currency): ${service.rate}\n` +
       `Quantity: ${quantity}\n` +
       `Provider cost for this quantity: ${providerCost.toFixed(4)} ${providers.CONFIG[service.provider].currency}\n` +
-      `Markup formula applied: x${process.env[service.provider === 'shweboost' ? 'SHWEBOOST_USD_TO_MMK' : 'SECSERS_USD_TO_MMK'] || 4400} (USD→MMK) x${process.env[service.provider === 'shweboost' ? 'SHWEBOOST_MARKUP_MULTIPLIER' : 'SECSERS_MARKUP_MULTIPLIER'] || (service.provider === 'shweboost' ? 2.3 : 1)}\n` +
+      `Markup formula applied: x${texts.t(service.provider + '_usd_to_mmk')} (USD→MMK) x${texts.t(service.provider + '_markup')}\n` +
       `Final sale cost: ${cost} ကျပ်\n\n` +
       `⚠️ ဒီအရေအတွက် မှားနေရင် "Stored rate" ကို ${service.provider} dashboard ထဲက service ရဲ့ rate နှင့် တိုက်စစ်ပါ - /syncservices ဖြင့် ပြန် sync လုပ်နိုင်ပါတယ်။`
     );
@@ -1197,6 +1215,39 @@ bot.command('cuponcode', async (ctx) => {
 // =======================================================================
 // Admin: editable texts
 // =======================================================================
+bot.command('setrate', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  const provider = (parts[1] || '').toLowerCase();
+  const usdToMmk = parts[2];
+  const markup = parts[3];
+  if (!['shweboost', 'secsers'].includes(provider) || !usdToMmk || !markup) {
+    return ctx.reply(
+      'ပုံစံ: /setrate <shweboost|secsers> <USD→MMK rate> <markup>\n\n' +
+      'ဥပမာ (ShweBoost က $1 ကို 2100 ကျပ်နှုန်းဖြင့် တွက်ပြီး 2.3 ဆ markup တင်လိုရင်):\n' +
+      '/setrate shweboost 2100 2.3\n\n' +
+      'ဥပမာ (Secsers က $1=4400ကျပ်, markup မတင်လိုရင်):\n' +
+      '/setrate secsers 4400 1\n\n' +
+      'ဖော်မြူလာ: ကျသင့်ငွေ = provider ရဲ့ USD ကုန်ကျစရိတ် × <USD→MMK rate> × <markup>'
+    );
+  }
+  await texts.setText(`${provider}_usd_to_mmk`, usdToMmk);
+  await texts.setText(`${provider}_markup`, markup);
+  await ctx.reply(
+    `✅ ${provider} ရဲ့ ဈေးနှုန်း formula ကို ချက်ချင်း ပြောင်းပြီးပါပြီ:\n` +
+    `ကျသင့်ငွေ = USD ကုန်ကျစရိတ် × ${usdToMmk} × ${markup}\n\n` +
+    `စစ်ဆေးရန် /testcost <serviceMongoId> <quantity> ကို run ကြည့်ပါ။`
+  );
+});
+
+bot.command('settopupmin', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  const amount = ctx.message.text.split(' ')[1];
+  if (!amount || !/^[0-9]+$/.test(amount)) return ctx.reply('ပုံစံ: /settopupmin <amount>\nဥပမာ: /settopupmin 1500');
+  await texts.setText('topup_min_amount', amount);
+  await ctx.reply(`✅ ငွေဖြည့်ရန် အနည်းဆုံးပမာဏကို ${amount} ကျပ် အဖြစ် သတ်မှတ်ပြီးပါပြီ။`);
+});
+
 bot.command('setkpay', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const parts = ctx.message.text.split(' ');

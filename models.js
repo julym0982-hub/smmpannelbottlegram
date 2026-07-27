@@ -24,17 +24,18 @@ const PlatformSchema = new mongoose.Schema({
 });
 
 const CategorySchema = new mongoose.Schema({
-  platform: { type: String, required: true }, // e.g. "telegram", "tiktok", "facebook"
+  platform: { type: String, required: true, index: true }, // e.g. "telegram", "tiktok", "facebook"
   label: { type: String, required: true },    // button text shown to users
   createdAt: { type: Date, default: Date.now }
 });
+CategorySchema.index({ platform: 1, label: 1 });
 
 // A service lives inside a category. If a category has only ONE service,
 // the user skips straight to the link/quantity flow when they tap the
 // category button. If it has MORE than one, the user sees another row of
 // buttons (e.g. all the reaction emojis) to pick the exact service.
 const ServiceSchema = new mongoose.Schema({
-  categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
+  categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true, index: true },
   label: { type: String, required: true },       // button text, e.g. "♥️" or "👍♥️🔥😁🎉 +Views"
   provider: { type: String, enum: ['shweboost', 'secsers'], required: true },
   providerServiceId: { type: String, required: true },
@@ -59,7 +60,7 @@ const MenuButtonSchema = new mongoose.Schema({
 });
 
 const OrderSchema = new mongoose.Schema({
-  userId: { type: String, required: true },
+  userId: { type: String, required: true, index: true },
   serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' },
   platform: String,
   categoryLabel: String,
@@ -69,7 +70,7 @@ const OrderSchema = new mongoose.Schema({
   link: String,
   quantity: Number,
   cost: Number, // MMK charged to the user's balance
-  status: { type: String, default: 'pending' }, // pending/in progress/completed/cancelled/partial/error
+  status: { type: String, default: 'pending', index: true }, // pending/in progress/completed/cancelled/partial/error
   refunded: { type: Boolean, default: false }, // guards against double refund on cancel
   startCount: Number,
   remains: Number,
