@@ -51,8 +51,27 @@ function cfg(provider) {
 
 async function call(provider, params) {
   const c = cfg(provider);
-  const { data } = await axios.post(c.url, Object.assign({ key: c.key }, params), { timeout: 20000 });
-  return data;
+  // Perfect-Panel-style APIs are built to accept classic HTML-form POST
+  // data, not a JSON body - some providers (like ShweBoost, apparently)
+  // tolerate JSON anyway, but stricter ones (behind Cloudflare, etc.) will
+  // 403 a JSON request. Form-encoding + a normal User-Agent is the safest
+  // format that works across all of them.
+  const form = new URLSearchParams(Object.assign({ key: c.key }, params));
+  try {
+    const { data } = await axios.post(c.url, form, {
+      timeout: 20000,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (compatible; SMMPanelBot/1.0)'
+      }
+    });
+    return data;
+  } catch (err) {
+    if (err.response) {
+      throw new Error(`${provider} API error ${err.response.status}: ${JSON.stringify(err.response.data).slice(0, 200)}`);
+    }
+    throw err;
+  }
 }
 
 // Some panels return average completion time under different keys and as a
