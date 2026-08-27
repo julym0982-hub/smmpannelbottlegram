@@ -34,6 +34,12 @@ function resetState(id) { state[id] = { level: 'root' }; }
 
 function isAdmin(id) { return ADMIN_IDS.includes(String(id)); }
 
+// Never expose upstream provider names, API URLs, HTTP status codes, or raw
+// provider responses to customers. Detailed errors remain in server logs.
+function customerError(fallback = 'ဆောင်ရွက်ရာတွင် ခေတ္တအခက်အခဲ ဖြစ်နေပါသည်။ ခဏနေပြီး ပြန်ကြိုးစားပေးပါရှင့်။') {
+  return `❌ ${fallback}`;
+}
+
 function chunk(arr, size) {
   const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -488,7 +494,8 @@ bot.on('text', async (ctx, next) => {
     try {
       cost = providers.calcSaleCost(service.provider, service.rate, quantity);
     } catch (err) {
-      return ctx.reply('❌ ' + err.message);
+      console.error('customer order cost calculation failed:', err.message);
+      return ctx.reply(customerError());
     }
     s.quantity = quantity;
     s.cost = cost;
@@ -710,11 +717,11 @@ bot.action('place_order', async (ctx) => {
   let providerOrderId;
   try {
     providerOrderId = await providers.placeOrder(service.provider, service.providerServiceId, s.link, s.quantity);
-  } catch (err) {
+    } catch (err) {
     resetState(ctx.from.id);
-    return ctx.reply('❌ Order တင်၍ မရပါ: ' + err.message, await mainMenuKeyboard());
+    console.error('customer order submission failed:', err.message);
+    return ctx.reply(customerError('Order ကို လက်ခံဆောင်ရွက်နေစဉ် အခက်အခဲ ဖြစ်နေပါသည်။ ခဏနေပြီး ပြန်ကြိုးစားပေးပါရှင့်။'), await mainMenuKeyboard());
   }
-
   user.balance -= s.cost;
   user.totalSpent = (user.totalSpent || 0) + s.cost;
   await user.save();
@@ -816,7 +823,8 @@ bot.action(/^cancel_order_([0-9a-fA-F]{24})$/, async (ctx) => {
       await ctx.reply(texts.t('order_cancel_fail'));
     }
   } catch (err) {
-    await ctx.reply('❌ Cancel တောင်းဆိုစဉ် error တက်သည်: ' + err.message);
+    console.error('customer order cancellation failed:', err.message);
+    await ctx.reply(customerError('Cancel တောင်းဆိုမှုကို ဆောင်ရွက်နေစဉ် အခက်အခဲ ဖြစ်နေပါသည်။ ခဏနေပြီး ပြန်ကြိုးစားပေးပါရှင့်။'));
   }
 });
 

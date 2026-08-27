@@ -49,6 +49,17 @@ function cfg(provider) {
   return c;
 }
 
+function responsePreview(data) {
+  if (typeof data === 'string') return data.replace(/\s+/g, ' ').trim().slice(0, 300);
+  try { return JSON.stringify(data).slice(0, 300); }
+  catch (_) { return String(data).slice(0, 300); }
+}
+
+function isCloudflareChallenge(status, data) {
+  const body = typeof data === 'string' ? data : responsePreview(data);
+  return status === 403 && /just a moment|cf-chl-|challenge-platform|cloudflare/i.test(body);
+}
+
 async function call(provider, params) {
   const c = cfg(provider);
   // Perfect-Panel-style APIs are built to accept classic HTML-form POST
@@ -61,14 +72,32 @@ async function call(provider, params) {
     const { data } = await axios.post(c.url, form, {
       timeout: 20000,
       headers: {
+        'Accept': 'application/json, text/plain, */*',
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'Mozilla/5.0 (compatible; SMMPanelBot/1.0)'
-      }
+      },
+      // Do not follow redirects silently: a redirect from /api/v2 to a web
+      // login/challenge page is a configuration/provider problem, not an API
+      // response that the bot can safely interpret.
+      maxRedirects: 0,
+      validateStatus: status => status >= 200 && status < 300
     });
     return data;
   } catch (err) {
     if (err.response) {
-      throw new Error(`${provider} API error ${err.response.status}: ${JSON.stringify(err.response.data).slice(0, 200)}`);
+      const status = err.response.status;
+      const body = err.response.data;
+      if (isCloudflareChallenge(status, body)) {
+        throw new Error(
+          `${provider} API ကို Cloudflare က block လုပ်ထားပါတယ် (403 challenge page). ` +
+          `HIROSHI_API_URL ကို website URL မဟုတ်ဘဲ provider ရဲ့ API documentation ထဲက API endpoint (/api/v2 စသည်) အတိအကျထားပါ၊ ` +
+          `မရသေးရင် Hiroshi support ဆီက server IP/API access whitelist တောင်းပါ။`
+        );
+      }
+      throw new Error(`${provider} API error ${status}: ${responsePreview(body)}`);
+    }
+    if (err.code === 'ERR_FR_TOO_MANY_REDIRECTS' || err.code === 'ERR_BAD_REQUEST') {
+      throw new Error(`${provider} API endpoint သည် API response မပေးဘဲ redirect လုပ်နေပါတယ်။ API endpoint URL ကို ပြန်စစ်ပါ။`);
     }
     throw err;
   }
