@@ -40,6 +40,21 @@ function customerError(fallback = 'ဆောင်ရွက်ရာတွင်
   return `❌ ${fallback}`;
 }
 
+// Logs use only a neutral category; raw upstream messages can reveal the
+// supplier name, endpoint, or response body.
+function failureCode(err) {
+  const message = String(err && err.message || err).toLowerCase();
+  if (/cloudflare|challenge|403|blocked/.test(message)) return 'UPSTREAM_ACCESS_BLOCKED';
+  if (/timeout|timed out|econn|network|redirect/.test(message)) return 'UPSTREAM_CONNECTION_FAILED';
+  if (/balance|insufficient/.test(message)) return 'UPSTREAM_BALANCE_OR_LIMIT';
+  if (/service|unknown|not found/.test(message)) return 'SERVICE_CONFIGURATION_ERROR';
+  return 'UPSTREAM_REQUEST_FAILED';
+}
+
+function logFailure(label, err) {
+  console.error(`${label}: ${failureCode(err)}`);
+}
+
 function chunk(arr, size) {
   const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -114,6 +129,21 @@ async function safeSend(chatId, text, extra) {
     console.error('safeSend error:', desc || err.message);
     return false;
   }
+}
+
+function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+// Run broadcasts outside the Telegram update handler so mass messaging does
+// not delay replies to other users. The delay helps avoid rate-limit bursts.
+function startBroadcast(adminId, recipients, text) {
+  setImmediate(async () => {
+    let sent = 0;
+    for (const recipientId of recipients) {
+      if (await safeSend(recipientId, text)) sent++;
+      await delay(75);
+    }
+    await safeSend(adminId, `✅ Broadcast ပြီးပါပြီ။ User ${sent}/${recipients.length} ဆီ ပို့နိုင်ပါတယ်။`);
+  });
 }
 
 async function getOrCreateUser(from) {
@@ -494,7 +524,7 @@ bot.on('text', async (ctx, next) => {
     try {
       cost = providers.calcSaleCost(service.provider, service.rate, quantity);
     } catch (err) {
-      console.error('customer order cost calculation failed:', err.message);
+      logFailure('customer order cost calculation failed', err);
       return ctx.reply(customerError());
     }
     s.quantity = quantity;
@@ -569,11 +599,11 @@ bot.on('text', async (ctx, next) => {
     return ctx.reply(ok ? '✅ ပို့ပြီးပါပြီ။' : '❌ ပို့မရပါ (block ထားနိုင်သည်)။');
   }
   if (s.level === 'admin_send_all' && isAdmin(ctx.from.id)) {
+    const adminId = String(ctx.from.id);
     resetState(ctx.from.id);
-    const users = await User.find({});
-    let sent = 0;
-    for (const u of users) { if (await safeSend(u._id, text)) sent++; }
-    return ctx.reply(`✅ User ${sent}/${users.length} ဆီကို ပို့ပြီးပါပြီ။`);
+    const users = await User.find({}).select('_id').lean();
+    startBroadcast(adminId, users.map(u => String(u._id)), text);
+    return ctx.reply(`✅ User ${users.length} ယောက်ဆီ စာပို့ခြင်းကို စတင်လိုက်ပါပြီ။ Bot ကို ဆက်သုံးနိုင်ပါတယ်။`);
   }
 
   // ---- admin: /addid wizard ----
@@ -719,7 +749,7 @@ bot.action('place_order', async (ctx) => {
     providerOrderId = await providers.placeOrder(service.provider, service.providerServiceId, s.link, s.quantity);
     } catch (err) {
     resetState(ctx.from.id);
-    console.error('customer order submission failed:', err.message);
+    logFailure('customer order submission failed', err);
     return ctx.reply(customerError('Order ကို လက်ခံဆောင်ရွက်နေစဉ် အခက်အခဲ ဖြစ်နေပါသည်။ ခဏနေပြီး ပြန်ကြိုးစားပေးပါရှင့်။'), await mainMenuKeyboard());
   }
   user.balance -= s.cost;
@@ -800,7 +830,7 @@ async function refreshOrderStatuses(orders) {
         }
       }
     } catch (err) {
-      console.error(`status refresh failed for ${provider}:`, err.message);
+      logFailure('status refresh failed', err);
     }
   }
 }
@@ -823,7 +853,7 @@ bot.action(/^cancel_order_([0-9a-fA-F]{24})$/, async (ctx) => {
       await ctx.reply(texts.t('order_cancel_fail'));
     }
   } catch (err) {
-    console.error('customer order cancellation failed:', err.message);
+    logFailure('customer order cancellation failed', err);
     await ctx.reply(customerError('Cancel တောင်းဆိုမှုကို ဆောင်ရွက်နေစဉ် အခက်အခဲ ဖြစ်နေပါသည်။ ခဏနေပြီး ပြန်ကြိုးစားပေးပါရှင့်။'));
   }
 });
@@ -1215,9 +1245,9 @@ bot.command('allsendmessage', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const rest = ctx.message.text.split(' ').slice(1).join(' ');
   if (rest) {
-    const users = await User.find({}); let sent = 0;
-    for (const u of users) { if (await safeSend(u._id, rest)) sent++; }
-    return ctx.reply(`✅ User ${sent}/${users.length} ဆီကို ပို့ပြီးပါပြီ။`);
+    const users = await User.find({}).select('_id').lean();
+    startBroadcast(String(ctx.from.id), users.map(u => String(u._id)), rest);
+    return ctx.reply(`✅ User ${users.length} ယောက်ဆီ စာပို့ခြင်းကို စတင်လိုက်ပါပြီ။ Bot ကို ဆက်သုံးနိုင်ပါတယ်။`);
   }
   st(ctx.from.id).level = 'admin_send_all';
   await ctx.reply('User အားလုံးသို့ ပို့လိုသော message ကို ရိုက်ထည့်ပါ');
