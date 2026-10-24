@@ -45,6 +45,7 @@
     users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5M16 4.5a3.5 3.5 0 010 7M18 14.8c2 .6 3.3 2.3 3.6 5.2"/>',
     box: '<path d="M3 7.5L12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5l9 4.5 9-4.5M12 12v9"/>',
     more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+    help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 114 2c-.9.6-1.5 1.1-1.5 2.3M12 17h.01"/>',
     gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13M5 12v8h14v-8M8.5 8a2.5 2.5 0 110-5C11 3 12 8 12 8s1-5 3.5-5a2.5 2.5 0 110 5"/>',
     mega: '<path d="M3 11v2a1 1 0 001 1h3l8 4V6L7 10H4a1 1 0 00-1 1zM19 8.5a5 5 0 010 7"/>',
     gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 01-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 010-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 014 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 010 4h-.1a1.7 1.7 0 00-1.5 1z"/>',
@@ -166,6 +167,18 @@
   const empty = (t) => h('div', { class: 'empty' }, t);
   const kv = (rows) => h('dl', { class: 'kv' }, rows.filter(Boolean).map(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
   const field = (label, input) => h('label', { class: 'f' }, h('span', {}, label), input);
+  // one-tap copy (falls back to a hidden textarea for old/in-app browsers)
+  function copyText(text) {
+    const ok = () => toast('Copy ပြီး: ' + String(text).slice(0, 40), 'ok');
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(String(text)).then(ok).catch(() => legacy());
+    return legacy();
+    function legacy() {
+      const t = h('textarea', { style: 'position:fixed;opacity:0' }); t.value = String(text); document.body.appendChild(t); t.select();
+      try { document.execCommand('copy'); ok(); } catch (_) { toast('Copy မရပါ', 'err'); }
+      t.remove();
+    }
+  }
+  const copyBtn = (text, label) => h('button', { class: 'btn sm', title: 'Copy', onclick: (e) => { e.stopPropagation(); copyText(text); } }, '⧉ ' + (label || 'Copy'));
   function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
   // ------------------------------------------------------------------
@@ -182,12 +195,13 @@
     { id: 'services', label: 'Services', icon: 'box' }
   ];
   const MORE = [
+    { id: 'help', label: 'Help Orders', icon: 'help' },
     { id: 'coupons', label: 'Coupon', icon: 'gift' },
     { id: 'broadcast', label: 'Broadcast', icon: 'mega' },
     { id: 'settings', label: 'Settings', icon: 'gear' },
     { id: 'logs', label: 'Activity Log', icon: 'log' }
   ];
-  const PAGES = { dashboard: pageDashboard, deposits: pageDeposits, orders: pageOrders, users: pageUsers, services: pageServices, coupons: pageCoupons, broadcast: pageBroadcast, settings: pageSettings, logs: pageLogs };
+  const PAGES = { dashboard: pageDashboard, deposits: pageDeposits, orders: pageOrders, users: pageUsers, services: pageServices, help: pageHelp, coupons: pageCoupons, broadcast: pageBroadcast, settings: pageSettings, logs: pageLogs };
 
   function routeId() { const r = (location.hash || '#dashboard').slice(1).split('?')[0]; return PAGES[r] ? r : 'dashboard'; }
   function clearTimers() { state.timers.forEach(clearInterval); state.timers = []; }
@@ -326,6 +340,7 @@
 
     const banners = [];
     if (d.alerts.pendingDeposits) banners.push(h('a', { class: 'banner warn', href: '#deposits' }, `💰 စစ်ဆေးရန် ငွေဖြည့်တောင်းဆိုမှု ${d.alerts.pendingDeposits} ခု စောင့်နေပါသည်`));
+    if (d.alerts.openHelp) banners.push(h('a', { class: 'banner warn', href: '#help' }, `🆘 Order အကူအညီ တောင်းဆိုမှု ${d.alerts.openHelp} ခု စောင့်နေပါသည်`));
     if (d.alerts.problemOrders) banners.push(h('a', { class: 'banner bad', href: '#orders' }, `⚠️ အာရုံစိုက်ရန် Order ${d.alerts.problemOrders} ခု (Partial / Cancel / Error)`));
     const provBox = h('div', { class: 'stack' }, h('div', { class: 'muted small' }, 'Loading...'));
     const lowBanner = h('div');
@@ -444,7 +459,7 @@
     const list = h('div', { class: 'stack' });
     const chips = h('div', { class: 'chips' });
     const FILTERS = [['', 'အားလုံး'], ['pending', 'Pending'], ['processing', 'Processing'], ['completed', 'Completed'], ['partial', 'Partial'], ['canceled', 'Canceled'], ['problem', '⚠️ Problem']];
-    const search = h('input', { type: 'search', placeholder: 'Link / User ID / Order ID ရှာရန်', oninput: debounce(() => { q = search.value.trim(); page = 1; load(); }, 350) });
+    const search = h('input', { type: 'search', placeholder: 'Order ID / Link / User ID ရှာရန်', oninput: debounce(() => { q = search.value.trim(); page = 1; load(); }, 350) });
     function drawChips() { chips.replaceChildren(...FILTERS.map(([k, l]) => h('button', { class: 'chip' + (status === k ? ' on' : ''), onclick: () => { status = k; page = 1; drawChips(); load(); } }, l))); }
     view.append(h('div', { class: 'toolbar' }, search), chips, h('div', { style: 'height:12px' }), list);
     drawChips();
@@ -464,9 +479,10 @@
     return h('div', { class: 'card', style: 'cursor:pointer', onclick: () => openOrder(o, reload) },
       h('div', { class: 'row nowrap' },
         h('div', { class: 'grow' }, h('div', { class: 'trunc', style: 'font-weight:700' }, o.label || '-'), h('div', { class: 'muted small trunc' }, o.link)),
+        h('button', { class: 'pill acc', style: 'border:0;cursor:copy', title: 'Order ID copy', onclick: (e) => { e.stopPropagation(); copyText(o.shortId); } }, '#' + o.shortId),
         statusPill(o.status)),
       h('div', { class: 'row small muted', style: 'margin-top:6px;justify-content:space-between' },
-        h('span', {}, `#${o.shortId} · ${o.userName} · ${fmt(o.quantity)} ခု`),
+        h('span', {}, `${o.userName} · ${fmt(o.quantity)} ခု`),
         h('span', {}, `${fmt(o.cost)} ကျပ်${profit !== null ? ' (+' + fmt(Math.round(profit)) + ')' : ''}${o.refunded ? ' · refunded ' + fmt(o.refundAmount) : ''}`),
         h('span', {}, dt(o.createdAt))));
   }
@@ -477,11 +493,13 @@
     const sel = h('select', {}, ['pending', 'processing', 'in progress', 'completed', 'partial', 'canceled'].map(s => h('option', { value: s, selected: String(o.status).toLowerCase() === s }, s)));
     const m = modal(`Order #${o.shortId}`, h('div', { class: 'stack' },
       kv([
-        ['Service', o.label], ['Link', h('a', { href: /^https?:\/\//i.test(o.link) ? o.link : null, target: '_blank', rel: 'noopener noreferrer' }, o.link)],
+        ['Order ID', h('span', { class: 'row', style: 'justify-content:flex-end' }, h('strong', { class: 'mono' }, o.shortId), copyBtn(o.shortId))],
+        ['Provider order ID', h('span', { class: 'row', style: 'justify-content:flex-end' }, h('span', { class: 'mono' }, `${o.provider} ${o.providerOrderId}`), copyBtn(o.providerOrderId))],
+        ['Service', o.label], ['Link', h('span', {}, h('a', { href: /^https?:\/\//i.test(o.link) ? o.link : null, target: '_blank', rel: 'noopener noreferrer' }, o.link), ' ', copyBtn(o.link))],
         ['User', h('button', { class: 'link', onclick: () => { m.close(); openUser(o.userId); } }, `${o.userName} (${o.userId})`)],
         ['အရေအတွက်', fmt(o.quantity)], ['ကျသင့်ငွေ', mmk(o.cost)], ['Provider ကုန်ကျ', o.baseCost == null ? '-' : mmk(o.baseCost)], ['အမြတ်', profit],
         ['Status', statusPill(o.status)], ['ကျန်ရှိ (remains)', o.remains == null ? '-' : fmt(o.remains)],
-        ['Provider', `${o.provider} #${o.providerOrderId}`], ['ငွေပြန်အမ်း', o.refunded ? mmk(o.refundAmount) : 'မရှိ'], ['ရက်စွဲ', dt(o.createdAt)]
+        ['ငွေပြန်အမ်း', o.refunded ? mmk(o.refundAmount) : 'မရှိ'], ['ရက်စွဲ', dt(o.createdAt)]
       ]),
       h('button', { class: 'btn', onclick: (e) => busy(e.target, async () => { const r = await POST(`/orders/${o.id}/refresh`); toast('Provider ကနေ ပြန်စစ်ပြီး: ' + r.status, 'ok'); done(m); }) }, '↻ Provider ကနေ status ပြန်စစ်ရန်'),
       h('div', { class: 'row nowrap' }, sel,
@@ -727,6 +745,47 @@
   }
 
   // ==================================================================
+  // PAGE: Help Orders (refill / speed up requests from the bot)
+  // ==================================================================
+  function pageHelp(view) {
+    let status = 'open', page = 1;
+    const list = h('div', { class: 'stack' });
+    const chips = h('div', { class: 'chips', style: 'margin-bottom:12px' });
+    const TYPE = { refill: '♻️ Refill', speed: '⚡ Speed up', cancel: '❌ Cancel' };
+    function drawChips() { chips.replaceChildren(...[['open', 'စောင့်ဆိုင်းဆဲ'], ['done', 'ပြီးပြီ']].map(([k, l]) => h('button', { class: 'chip' + (status === k ? ' on' : ''), onclick: () => { status = k; page = 1; drawChips(); load(); } }, l))); }
+    view.append(h('div', { class: 'muted small', style: 'margin-bottom:10px' }, 'User တွေ Bot ထဲက "Order အကူအညီ" ကနေ တောင်းထားတာတွေပါ။ Provider order ID ကို copy ကူးပြီး provider ရဲ့ support chat မှာ ပို့ပါ၊ ပြီးရင် "ဆောင်ရွက်ပြီး" နှိပ်ပါ။ User ဆီ အလိုအလျောက် အကြောင်းကြားပါမယ်။'), chips, list);
+    drawChips();
+    async function load() {
+      let r; try { r = await GET(`/help?status=${status}&page=${page}`); } catch (e) { return fail(e); }
+      list.replaceChildren();
+      if (!r.items.length) list.appendChild(empty(status === 'open' ? '🎉 စောင့်ဆိုင်းနေတာ မရှိပါ' : 'မှတ်တမ်း မရှိပါ'));
+      r.items.forEach(x => {
+        const msgText = `Order ${x.providerOrderId} ${x.type === 'refill' ? 'refill please' : x.type === 'speed' ? 'speed up please' : 'cancel please'}`;
+        list.appendChild(h('div', { class: 'card' },
+          h('div', { class: 'row nowrap' }, h('strong', { class: 'grow' }, TYPE[x.type] || x.type), x.auto ? h('span', { class: 'pill ok' }, 'API ပို့ပြီး') : h('span', { class: 'pill warn' }, 'Manual'), h('span', { class: 'muted small' }, ago(x.createdAt))),
+          h('div', { style: 'height:8px' }),
+          kv([
+            ['User', h('button', { class: 'link', onclick: () => openUser(x.userId) }, `${x.userName} (${x.userId})`)],
+            ['Order ID', h('span', { class: 'row', style: 'justify-content:flex-end' }, h('strong', { class: 'mono' }, x.orderNo || '-'), x.orderNo ? copyBtn(x.orderNo) : null)],
+            ['Provider order', h('span', { class: 'row', style: 'justify-content:flex-end' }, h('span', { class: 'mono' }, `${x.provider} ${x.providerOrderId}`), copyBtn(x.providerOrderId))],
+            ['Service', x.label || '-'], ['Qty / Status', `${fmt(x.quantity)} · ${x.orderStatus}`],
+            ['Link', h('span', {}, x.link ? shortLink(x.link) : '-', ' ', x.link ? copyBtn(x.link) : null)],
+            x.result ? ['မှတ်ချက်', x.result] : null
+          ]),
+          h('div', { class: 'row', style: 'margin-top:12px' },
+            copyBtn(msgText, 'Support စာ copy'),
+            status === 'open' ? h('button', { class: 'btn ok grow', onclick: (e) => busy(e.target, async () => { await POST(`/help/${x.id}/done`, {}); toast('ပြီးပြီ၊ User ကို အကြောင်းကြားပြီး', 'ok'); load(); pollAlerts(); }) }, '✅ ဆောင်ရွက်ပြီး') : null,
+            status === 'open' ? h('button', { class: 'btn', onclick: async (e) => { const v = await promptBox('User ဆီ စာနဲ့ အကြောင်းကြားမည်', 'ပို့မည့်စာ', { textarea: true, okLabel: 'ပို့ပြီး ပြီးစီးမည်' }); if (v) busy(e.target, async () => { await POST(`/help/${x.id}/done`, { message: v }); toast('ပို့ပြီး', 'ok'); load(); pollAlerts(); }); } }, '✉️ စာနဲ့') : null,
+            h('button', { class: 'btn danger', onclick: async (e) => { if (await confirmBox('ဖျက်မည်', 'ဒီ request ကို ဖျက်မလား?', 'ဖျက်မည်', true)) busy(e.target, async () => { await DEL('/help/' + x.id); load(); }); } }, '🗑'))));
+      });
+      const p = pager(r, n => { page = n; load(); }); if (p) list.appendChild(p);
+    }
+    const shortLink = (l) => (l.length > 38 ? l.slice(0, 38) + '…' : l);
+    load();
+    every(20000, load);
+  }
+
+  // ==================================================================
   // PAGE: Coupons
   // ==================================================================
   async function pageCoupons(view) {
@@ -774,9 +833,9 @@
     const body = h('div', { class: 'stack' });
     const chips = h('div', { class: 'chips', style: 'margin-bottom:12px' });
     function draw() {
-      chips.replaceChildren(...[['pricing', 'ဈေးနှုန်း'], ['payment', 'ငွေလက်ခံ'], ['messages', 'Bot စာသားများ'], ['menu', 'Menu buttons']].map(([k, l]) => h('button', { class: 'chip' + (tab === k ? ' on' : ''), onclick: () => { tab = k; draw(); } }, l)));
+      chips.replaceChildren(...[['pricing', 'ဈေးနှုန်း'], ['payment', 'ငွေလက်ခံ'], ['features', 'Help & Data'], ['messages', 'Bot စာသားများ'], ['menu', 'Menu buttons']].map(([k, l]) => h('button', { class: 'chip' + (tab === k ? ' on' : ''), onclick: () => { tab = k; draw(); } }, l)));
       body.replaceChildren();
-      ({ pricing: tabPricing, payment: tabPayment, messages: tabMessages, menu: tabMenu })[tab]();
+      ({ pricing: tabPricing, payment: tabPayment, features: tabFeatures, messages: tabMessages, menu: tabMenu })[tab]();
     }
     async function save(values) { await POST('/settings', { values }); toast('သိမ်းပြီး ✅', 'ok'); }
 
@@ -798,6 +857,40 @@
       const inputs = Object.fromEntries(keys.map(([k]) => [k, h('input', { type: 'text', value: s.payment[k] })]));
       body.appendChild(h('div', { class: 'card' }, h('div', { class: 'stack' }, keys.map(([k, l]) => field(l, inputs[k])),
         h('button', { class: 'btn primary', onclick: (e) => busy(e.target, () => save(Object.fromEntries(keys.map(([k]) => [k, inputs[k].value])))) }, 'သိမ်းမည်'))));
+    }
+    async function tabFeatures() {
+      const f = s.features;
+      const sw = (checked, onchange) => h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked, onchange }), h('i'));
+      const helpSw = sw(f.help_enabled !== '0', async () => { try { await save({ help_enabled: helpSw.firstChild.checked ? '1' : '0' }); toast(helpSw.firstChild.checked ? 'Help Order ဖွင့်ပြီး (user တွေ မြင်ရမည်)' : 'Help Order ပိတ်ပြီး (user တွေ မမြင်ရတော့)', 'ok'); } catch (e) { helpSw.firstChild.checked = !helpSw.firstChild.checked; fail(e); } });
+      body.appendChild(h('div', { class: 'card' }, h('div', { class: 'row nowrap' }, h('div', { class: 'grow' }, h('h2', { style: 'margin:0' }, '🆘 Order အကူအညီ (Help Order)'), h('div', { class: 'muted small' }, 'ပိတ်ထားရင် user တွေရဲ့ main menu ထဲမှာ ခလုတ် မပေါ်ပါ၊ ဖွင့်ရင် ပေါ်ပါမယ်')), helpSw)));
+
+      const autoSw = sw(f.history_auto !== '0', () => {});
+      const days = h('input', { type: 'number', value: f.history_keep_days, min: 1, max: 365, inputmode: 'numeric' });
+      const last = h('input', { type: 'number', value: f.history_keep_last, min: 0, max: 365, inputmode: 'numeric' });
+      const info = h('div', { class: 'small muted' }, 'Loading...');
+      const result = h('div', { class: 'small' });
+      body.appendChild(h('div', { class: 'card' }, h('h2', {}, '🧹 History ရှင်းလင်းခြင်း (MongoDB နေရာမပြည့်အောင်)'),
+        h('div', { class: 'muted small' }, 'ပြီးဆုံးပြီးသား (completed/canceled/partial) order တွေကိုသာ ရှင်းပါမယ်။ လုပ်ဆောင်နေဆဲ order တွေကို လုံးဝ မထိပါ။ ရှင်းလိုက်တဲ့ order တွေရဲ့ ရောင်းရငွေ/အမြတ် စာရင်းကိုတော့ Dashboard မှာ ဆက်မှတ်ထားပါမယ်။'),
+        h('div', { style: 'height:10px' }), info, h('div', { style: 'height:10px' }),
+        h('div', { class: 'stack' },
+          h('label', { class: 'row nowrap' }, autoSw, h('span', {}, 'နေ့စဉ် အလိုအလျောက် ရှင်းမည်')),
+          field('ဘယ်နှရက်ထက် ကျော်တဲ့ order တွေကို ရှင်းမလဲ', days),
+          field('User တစ်ယောက်စီရဲ့ နောက်ဆုံး order ဘယ်နှခုကို အမြဲချန်ထားမလဲ', last),
+          h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => { await save({ history_auto: autoSw.firstChild.checked ? '1' : '0', history_keep_days: days.value, history_keep_last: last.value }); loadInfo(); }) }, 'သိမ်းမည်'),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn grow', onclick: (e) => busy(e.target, async () => { const r = await POST('/data/cleanup', { dryRun: true }); result.textContent = `ကြိုကြည့်: Order ${fmt(r.orders)} ခု၊ ငွေဖြည့်မှတ်တမ်း ${fmt(r.deposits)}၊ help ${fmt(r.help)}၊ log ${fmt(r.logs)} ကို ရှင်းမည်ဖြစ်သည်`; }) }, '👁 ဘာတွေ ရှင်းမလဲ ကြိုကြည့်'),
+            h('button', { class: 'btn danger grow', onclick: async (e) => { if (await confirmBox('ယခု ရှင်းမည်', 'သိမ်းထားတဲ့ ဆက်တင်အတိုင်း အဟောင်းတွေကို ဖျက်မှာ သေချာပါသလား? (ပြန်မရပါ)', 'ရှင်းမည်', true)) busy(e.target, async () => { const r = await POST('/data/cleanup', { dryRun: false }); result.textContent = `ရှင်းပြီး: Order ${fmt(r.orders)} ခု၊ ငွေဖြည့်မှတ်တမ်း ${fmt(r.deposits)}၊ help ${fmt(r.help)}၊ log ${fmt(r.logs)}`; toast('ရှင်းပြီး ✅', 'ok'); loadInfo(); }); } }, '🧹 ယခုရှင်းမည်')),
+          result)));
+      async function loadInfo() {
+        try {
+          const d = await GET('/data');
+          info.replaceChildren(...[
+            h('div', {}, `Orders ${fmt(d.counts.orders)} · Users ${fmt(d.counts.users)} · ငွေဖြည့် ${fmt(d.counts.deposits)} · Help ${fmt(d.counts.help)} · Log ${fmt(d.counts.logs)}`),
+            d.storage ? h('div', {}, `Database အသုံးပြုမှု: ${d.storage.storageMB} MB / ${d.storage.limitMB} MB (free plan)`) : null,
+            h('div', {}, 'နောက်ဆုံး ရှင်းခဲ့တာ: ' + (d.lastCleanup ? dt(d.lastCleanup) : 'မရှင်းရသေးပါ'))].filter(Boolean));
+        } catch (e) { info.textContent = e.message; }
+      }
+      loadInfo();
     }
     function tabMessages() {
       body.appendChild(h('div', { class: 'muted small' }, '${name} ${balance} စတဲ့ placeholder တွေကို မဖျက်ပါနဲ့ - ဒါမှ user နာမည်/ငွေပမာဏ အစားထိုးပေးနိုင်မှာပါ။'));
