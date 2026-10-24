@@ -114,3 +114,9 @@ Facebook အတွက် category/service တွေကို ခုနောက�
 - Provider API endpoint URL (`/api/v2` စသည်) က provider dashboard ထဲက "API" page မှာ တိတိကျကျ ပြထားပါလိမ့်မည် — မှန်ကန်မှန်း စစ်ပြီးမှ `.env` ထဲ ထည့်ပါ
 - Provider နှစ်ခုစလုံး request/response ပုံစံ standard "Perfect Panel API" အတိုင်း ယူထားပါတယ်။ တကယ်တမ်း ခြားနားနေရင် `providers.js` ထဲက function တွေထဲမှာ ပြင်ရပါမယ်
 - MongoDB Atlas free tier က persistent ဖြစ်လို့ Render restart/redeploy တိုင်း data ပျက်စရာ မလိုပါ
+
+## 🌐 Admin Panel (website)
+
+1. Render env ထဲမှာ `PANEL_URL=https://your-app.onrender.com` ထည့်ပါ (RENDER_EXTERNAL_URL ရှိရင် မလိုပါ)။
+2. Bot ထဲမှာ Admin က `/adminlogin` ပို့ → "Admin Panel ဝင်ရန်" button ပြန်လာမည်။ Admin မဟုတ်ရင် ဘာမှ မပြန်ပါ။ Link က ၅ မိနစ်၊ တစ်ကြိမ်သာ၊ session ၁၂ နာရီ။
+3. Panel: Dashboard (ရောင်းရငွေ/အမြတ်/provider လက်ကျန်)၊ ငွေဖြည့် Accept/Edit/Reject (Telegram button နဲ့ panel နှစ်နေရာလုံးက တူညီပြီး ငွေ နှစ်ခါ မဝင်ပါ)၊ Orders (status/refund)၊ Users (ငွေထည့်/နှုတ်၊ ban၊ discount %၊ စာပို့)၊ Services (shweboost/hiroshi/secsers ကနေ ရှာပြီး tick နှိပ်ပြီး ထည့်)၊ Coupon၊ Broadcast၊ Settings (ဈေး/KPay/စာသား/menu)၊ Activity log။

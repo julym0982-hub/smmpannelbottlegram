@@ -107,9 +107,22 @@ async function call(provider, params) {
 // free-text string (e.g. "18 Minutes", "10-30 minutes", "1 Hour"), not a
 // clean number - so we keep the raw text and only extract a number as a
 // best-effort fallback, rather than forcing Number() and silently getting NaN.
-async function fetchServiceInfo(provider, providerServiceId) {
+// The full provider catalogue is big (thousands of rows) and every
+// /addbutton, /syncservices item and admin-panel search needs it - cache it
+// for a few minutes instead of downloading it again for each service.
+const listCache = {};
+const LIST_TTL = 5 * 60 * 1000;
+async function listServices(provider, force = false) {
+  const hit = listCache[provider];
+  if (!force && hit && Date.now() - hit.at < LIST_TTL) return hit.list;
   const list = await call(provider, { action: 'services' });
   if (!Array.isArray(list)) throw new Error('Unexpected response from provider services list');
+  listCache[provider] = { at: Date.now(), list };
+  return list;
+}
+
+async function fetchServiceInfo(provider, providerServiceId) {
+  const list = await listServices(provider);
   const found = list.find(s => String(s.service) === String(providerServiceId));
   if (!found) throw new Error(`Service id ${providerServiceId} ကို ${provider} ထဲမှာ ရှာမတွေ့ပါ`);
   const rawTime = found.average_time || found.averageTime || found.average || found.time || null;
@@ -137,6 +150,13 @@ function formatDuration(rawTime) {
 function calcSaleCost(provider, rate, quantity) {
   const providerCost = (rate / 1000) * quantity; // in provider's own currency
   return Math.ceil(cfg(provider).toSaleCost(providerCost));
+}
+
+// what the PROVIDER charges us for an order, converted to MMK (no markup) -
+// stored on each order so the panel can show real profit
+function calcBaseCost(provider, rate, quantity) {
+  const usdToMmk = Number(texts.t(provider + '_usd_to_mmk')) || 0;
+  return Math.ceil((rate / 1000) * quantity * usdToMmk);
 }
 
 async function placeOrder(provider, providerServiceId, link, quantity) {
@@ -174,5 +194,5 @@ async function getBalance(provider) {
 }
 
 module.exports = {
-  CONFIG, fetchServiceInfo, calcSaleCost, placeOrder, orderStatus, orderStatusBulk, cancelOrder, getBalance, formatDuration
+  CONFIG, listServices, fetchServiceInfo, calcSaleCost, calcBaseCost, placeOrder, orderStatus, orderStatusBulk, cancelOrder, getBalance, formatDuration
 };

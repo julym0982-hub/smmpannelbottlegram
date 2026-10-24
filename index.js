@@ -2,9 +2,10 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const { Telegraf, Markup } = require('telegraf');
-const { MenuButton, Platform, User, Category, Service, Order, Coupon } = require('./models');
+const { MenuButton, Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog } = require('./models');
 const providers = require('./providers');
 const texts = require('./texts');
+const mountAdminPanel = require('./admin');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -28,6 +29,7 @@ const bot = new Telegraf(BOT_TOKEN);
 // in-memory per-user conversation state (NOT persisted - orders/users/
 // services all live in MongoDB, this is just "where is this chat right now")
 // ---------------------------------------------------------------------
+let panel = null; // set once the web admin panel is mounted (see bottom of file)
 const state = {};
 function st(id) { if (!state[id]) state[id] = { level: 'root' }; return state[id]; }
 function resetState(id) { state[id] = { level: 'root' }; }
@@ -53,6 +55,14 @@ function failureCode(err) {
 
 function logFailure(label, err) {
   console.error(`${label}: ${failureCode(err)}`);
+}
+
+// sale price for one order, including the user's personal reseller discount
+// (set from the admin panel). Always rounded UP so we never sell below cost.
+function priceFor(user, service, quantity) {
+  const base = providers.calcSaleCost(service.provider, service.rate, quantity);
+  const d = Math.min(100, Math.max(0, Number(user && user.discount) || 0));
+  return d ? Math.max(1, Math.ceil(base * (1 - d / 100))) : base;
 }
 
 function chunk(arr, size) {
@@ -201,6 +211,8 @@ const ADMIN_GUIDE = [
 1️⃣ Home button ဆောက်ပါ (Telegram Service/Tiktok Service/...)
 2️⃣ ဒီ home button တွေထဲကို category + service (emoji button) တွေ ထည့်ပါ
 3️⃣ Kpay/Wave payment number ထည့်ပါ
+
+🌐 **Admin Panel (website)**: /adminlogin ကို ပို့ရင် panel ဝင်ရန် button link ပို့ပေးမည် (Admin မဟုတ်သူများဆီ ဘာမှ မပြန်ပါ)။ Panel ထဲမှာ ငွေဖြည့်ခြင်း၊ order၊ user၊ service၊ coupon၊ broadcast အားလုံး စီမံနိုင်သည်။
 
 အောက်က message တွေမှာ တစ်ခုချင်းစီကို အသေးစိတ် ဆက်ပြောပေးပါမယ်။`,
 
@@ -434,7 +446,7 @@ async function showCategoryMenu(ctx, platform) {
 }
 
 async function enterCategory(ctx, category) {
-  const services = await Service.find({ categoryId: category._id });
+  const services = await Service.find({ categoryId: category._id, active: { $ne: false } });
   if (!services.length) {
     return ctx.reply(isAdmin(ctx.from.id)
       ? '😔 ဒီ category အတွက် service များ မရှိသေးပါ။ /addbutton (သို့) /addid ဖြင့် ထည့်ပါ။'
@@ -494,7 +506,7 @@ bot.on('text', async (ctx, next) => {
     return enterCategory(ctx, category);
   }
   if (s.level === 'service') {
-    const service = await Service.findOne({ categoryId: s.categoryId, label: text });
+    const service = await Service.findOne({ categoryId: s.categoryId, label: text, active: { $ne: false } });
     if (!service) return ctx.reply(`❌ "${text}" ဆိုတဲ့ service မတွေ့ပါ။ Menu ထဲက button ကိုပဲ နှိပ်ပေးပါ။`);
     const category = await Category.findById(s.categoryId);
     return startLinkFlow(ctx, service, category);
@@ -516,13 +528,13 @@ bot.on('text', async (ctx, next) => {
     }
     const quantity = parseInt(text, 10);
     const service = await Service.findById(s.serviceId);
-    if (!service) { resetState(ctx.from.id); return ctx.reply('❌ Service မတွေ့ပါ၊ ပြန်လည် ရွေးပေးပါ။', await mainMenuKeyboard()); }
+    if (!service || service.active === false) { resetState(ctx.from.id); return ctx.reply('❌ Service မတွေ့ပါ၊ ပြန်လည် ရွေးပေးပါ။', await mainMenuKeyboard()); }
     if (quantity < service.min || quantity > service.max) {
       return ctx.reply(`⚠️ quantity သည် ${service.min} နှင့် ${service.max} ကြားဖြစ်ရပါမည်။`);
     }
     let cost;
     try {
-      cost = providers.calcSaleCost(service.provider, service.rate, quantity);
+      cost = priceFor(ctx.dbUser, service, quantity);
     } catch (err) {
       logFailure('customer order cost calculation failed', err);
       return ctx.reply(customerError());
@@ -546,10 +558,15 @@ bot.on('text', async (ctx, next) => {
     if (!coupon) return ctx.reply('❌ Cupon code မှားနေပါသည်ရှင့်။');
     if (coupon.usedBy.includes(userId)) return ctx.reply('❌ ဒီ Cupon code ကို ခင်ဗျား အသုံးပြုပြီးပါပြီရှင့် - တစ်ယောက်ကို တစ်ကြိမ်သာ အသုံးပြုနိုင်ပါသည်။');
     if (coupon.remaining <= 0) return ctx.reply('❌ ဒီ Cupon code ကို သတ်မှတ်ထားသော ကန့်သတ်ချက် ပြည့်သွားပါပြီရှင့်။');
-    coupon.remaining -= 1;
-    coupon.usedBy.push(userId);
-    await coupon.save();
-    ctx.dbUser.balance += coupon.amount; await ctx.dbUser.save();
+    // one atomic update: two people (or one person double-tapping) can never
+    // both squeeze through the last remaining use
+    const claimed = await Coupon.findOneAndUpdate(
+      { _id: code, remaining: { $gt: 0 }, usedBy: { $ne: userId } },
+      { $inc: { remaining: -1 }, $push: { usedBy: userId } },
+      { new: true }
+    );
+    if (!claimed) return ctx.reply('❌ ဒီ Cupon code ကို အသုံးပြု၍ မရတော့ပါရှင့်။');
+    await User.findByIdAndUpdate(userId, { $inc: { balance: coupon.amount } });
     return ctx.reply(`🎉 Cupon code အောင်မြင်ပါသည်! သင့်အကောင့်ထဲသို့ ${coupon.amount} ကျပ် ထည့်ပေးလိုက်ပါပြီရှင့်။`);
   }
 
@@ -562,33 +579,37 @@ bot.on('text', async (ctx, next) => {
     if (amount < minAmount) {
       return ctx.reply(texts.t('topup_below_min', { min: minAmount })); // stays on this step so they can retype
     }
-    s.amount = amount; s.level = 'root';
-    const caption = `🧾 ငွေဖြည့်တောင်းဆိုမှု\nUser: ${displayName(ctx.from)} (@${ctx.from.username || '-'})\nUser ID: ${ctx.from.id}\nနည်းလမ်း: ${s.method || '-'}\nပမာဏ: ${amount} ကျပ်`;
-    for (const adminId of ADMIN_IDS) {
-      try {
-        await bot.telegram.sendPhoto(adminId, s.screenshotFileId, {
-          caption,
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('✅ Confirm', `confirm_topup_${ctx.from.id}_${amount}`)],
-            [Markup.button.callback('✏️ Edit Amount', `editamt_${ctx.from.id}_${amount}`)]
-          ]).reply_markup
-        });
-      } catch (err) { console.error('notify admin failed', err.message); }
+    const pending = await Deposit.countDocuments({ userId: String(ctx.from.id), status: 'pending' });
+    if (pending >= 5) {
+      resetState(ctx.from.id);
+      return ctx.reply('⚠️ စစ်ဆေးဆဲ ငွေဖြည့်တောင်းဆိုမှု များနေပါသည်ရှင့်။ Admin အတည်ပြုပြီးမှ ထပ်တင်ပေးပါနော်။', await mainMenuKeyboard());
     }
+    const dep = await Deposit.create({
+      userId: String(ctx.from.id), method: s.method || '-', amount, requestedAmount: amount,
+      screenshotFileId: s.screenshotFileId
+    });
+    s.level = 'root';
+    await notifyAdminsNewDeposit(dep, ctx.from);
     await ctx.reply(texts.t('topup_submitted'), await mainMenuKeyboard());
     return;
   }
 
   // ---- admin: edit top-up amount before crediting ----
   if (s.level === 'admin_edit_amount' && isAdmin(ctx.from.id)) {
-    if (!/^[0-9]+$/.test(text)) return ctx.reply('ဂဏန်းသက်သက်ဖြင့်သာ ရေးပေးပါ။');
+    if (!/^[0-9]+$/.test(text) || parseInt(text, 10) <= 0) return ctx.reply('ဂဏန်းသက်သက်ဖြင့်သာ ရေးပေးပါ။');
     const newAmount = parseInt(text, 10);
+    const depositId = s.editDepositId;
     const targetUserId = s.editTargetUserId;
     resetState(ctx.from.id);
-    const u = await User.findById(targetUserId);
-    if (u) { u.balance += newAmount; await u.save(); }
+    if (depositId) {
+      const res = await approveDeposit(depositId, { amount: newAmount, by: `bot:${ctx.from.id}` });
+      if (res.ok) return ctx.reply(`✅ User ${res.deposit.userId} အတွက် ${newAmount} ကျပ် ပြင်ဆင်ပြီး ထည့်ပေးလိုက်ပါပြီ။`);
+      return ctx.reply(res.error === 'already_handled' ? `ℹ️ ဒီတောင်းဆိုမှုကို ကိုင်တွယ်ပြီးသားပါ (${res.deposit && res.deposit.status})။` : '❌ တောင်းဆိုမှု မတွေ့ပါ။');
+    }
+    // legacy notification (sent before deposits were stored in the database)
+    await User.findByIdAndUpdate(targetUserId, { $inc: { balance: newAmount } });
     await ctx.reply(`✅ ${targetUserId} အတွက် ${newAmount} ကျပ် ထည့်ပေးလိုက်ပါပြီ။`);
-    await safeSend(targetUserId, `သင်ဖြည့်ထားသောငွေပမာဏမှာ ${newAmount} ဖြစ်သောကြောင့် သင့်အကောင့်ထဲသို့ ${newAmount} ကျပ် ထည့်ပေးထားပါတယ်ရှင့် ❤️`);
+    await safeSend(targetUserId, texts.t('topup_edited', { amount: newAmount }));
     return;
   }
 
@@ -704,12 +725,118 @@ bot.on('photo', async (ctx) => {
   await ctx.reply(texts.t('topup_ask_amount'));
 });
 
+// ---------------------------------------------------------------------
+// Deposits: the same approve / reject / edit logic is used by the Telegram
+// buttons below AND the web admin panel (admin.js). The atomic
+// pending -> approved/rejected switch guarantees one credit only, even if
+// both places are tapped at the same moment.
+// ---------------------------------------------------------------------
+const MAX_TOPUP = 100000000;
+function validAmount(n) { return Number.isFinite(n) && n > 0 && n <= MAX_TOPUP && Math.floor(n) === n; }
+
+async function notifyAdminsNewDeposit(dep, from) {
+  const caption = `🧾 ငွေဖြည့်တောင်းဆိုမှု\nUser: ${displayName(from)} (@${from.username || '-'})\nUser ID: ${from.id}\nနည်းလမ်း: ${dep.method || '-'}\nပမာဏ: ${dep.amount} ကျပ်`;
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.callback('✅ Confirm', `dep_ok_${dep._id}`), Markup.button.callback('❌ Reject', `dep_no_${dep._id}`)],
+    [Markup.button.callback('✏️ Edit Amount', `dep_edit_${dep._id}`)]
+  ]).reply_markup;
+  const sent = [];
+  for (const adminId of ADMIN_IDS) {
+    try {
+      const m = await bot.telegram.sendPhoto(adminId, dep.screenshotFileId, { caption, reply_markup: markup });
+      sent.push({ chatId: String(adminId), messageId: m.message_id });
+    } catch (err) { console.error('notify admin failed', err.message); }
+  }
+  if (sent.length) await Deposit.findByIdAndUpdate(dep._id, { adminMessages: sent });
+}
+
+// after a deposit is handled (from the bot OR the panel), strip the buttons
+// from every admin's notification and show the result, so nobody taps stale buttons
+async function refreshDepositMessages(dep) {
+  const label = dep.status === 'approved'
+    ? `✅ APPROVED — ${dep.amount} ကျပ်${dep.amount !== dep.requestedAmount ? ` (user တောင်းခဲ့သည်: ${dep.requestedAmount})` : ''}`
+    : `❌ REJECTED${dep.note ? ' — ' + dep.note : ''}`;
+  const by = dep.handledBy === 'panel' ? 'Admin Panel' : (dep.handledBy || '').replace('bot:', 'Admin ');
+  for (const m of dep.adminMessages || []) {
+    try {
+      await bot.telegram.editMessageCaption(
+        m.chatId, m.messageId, undefined,
+        `🧾 ငွေဖြည့်တောင်းဆိုမှု\nUser ID: ${dep.userId}\nနည်းလမ်း: ${dep.method || '-'}\n\n${label}\n(${by})`,
+        { reply_markup: { inline_keyboard: [] } }
+      );
+    } catch (_) { /* message too old / already edited - harmless */ }
+  }
+}
+
+async function approveDeposit(id, { amount, by } = {}) {
+  const current = await Deposit.findById(id).catch(() => null);
+  if (!current) return { ok: false, error: 'not_found' };
+  const finalAmount = amount != null ? amount : current.amount;
+  if (!validAmount(finalAmount)) return { ok: false, error: 'bad_amount', deposit: current };
+  const dep = await Deposit.findOneAndUpdate(
+    { _id: id, status: 'pending' },
+    { status: 'approved', amount: finalAmount, handledBy: by || 'panel', handledAt: new Date() },
+    { new: true }
+  );
+  if (!dep) return { ok: false, error: 'already_handled', deposit: current };
+  await User.findByIdAndUpdate(dep.userId, { $inc: { balance: dep.amount } });
+  const edited = dep.requestedAmount != null && dep.amount !== dep.requestedAmount;
+  await safeSend(dep.userId, texts.t(edited ? 'topup_edited' : 'topup_success', { amount: dep.amount }));
+  await refreshDepositMessages(dep);
+  return { ok: true, deposit: dep };
+}
+
+async function rejectDeposit(id, { reason, by } = {}) {
+  const current = await Deposit.findById(id).catch(() => null);
+  if (!current) return { ok: false, error: 'not_found' };
+  const dep = await Deposit.findOneAndUpdate(
+    { _id: id, status: 'pending' },
+    { status: 'rejected', note: reason || '', handledBy: by || 'panel', handledAt: new Date() },
+    { new: true }
+  );
+  if (!dep) return { ok: false, error: 'already_handled', deposit: current };
+  await safeSend(dep.userId, texts.t('topup_rejected', { amount: dep.amount, reason: reason ? `\nအကြောင်းရင်း: ${reason}` : '' }));
+  await refreshDepositMessages(dep);
+  return { ok: true, deposit: dep };
+}
+
+function depositReply(res) {
+  if (res.ok) return null;
+  if (res.error === 'already_handled') return `ℹ️ ဒီတောင်းဆိုမှုကို ကိုင်တွယ်ပြီးသားပါ (${res.deposit && res.deposit.status})။`;
+  if (res.error === 'bad_amount') return '❌ ပမာဏ မမှန်ပါ။';
+  return '❌ တောင်းဆိုမှု မတွေ့ပါ။';
+}
+
+bot.action(/^dep_ok_([0-9a-f]{24})$/, async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Admin only', { show_alert: true });
+  await ctx.answerCbQuery();
+  const res = await approveDeposit(ctx.match[1], { by: `bot:${ctx.from.id}` });
+  await ctx.reply(res.ok ? `✅ User ${res.deposit.userId} အတွက် ${res.deposit.amount} ကျပ် အောင်မြင်စွာ ထည့်ပြီးပါပြီ။` : depositReply(res));
+});
+bot.action(/^dep_no_([0-9a-f]{24})$/, async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Admin only', { show_alert: true });
+  await ctx.answerCbQuery();
+  const res = await rejectDeposit(ctx.match[1], { by: `bot:${ctx.from.id}` });
+  await ctx.reply(res.ok ? `❌ User ${res.deposit.userId} ရဲ့ တောင်းဆိုမှုကို ပယ်ချလိုက်ပါပြီ။` : depositReply(res));
+});
+bot.action(/^dep_edit_([0-9a-f]{24})$/, async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Admin only', { show_alert: true });
+  await ctx.answerCbQuery();
+  const dep = await Deposit.findById(ctx.match[1]).catch(() => null);
+  if (!dep) return ctx.reply('❌ တောင်းဆိုမှု မတွေ့ပါ။');
+  if (dep.status !== 'pending') return ctx.reply(`ℹ️ ဒီတောင်းဆိုမှုကို ကိုင်တွယ်ပြီးသားပါ (${dep.status})။`);
+  const s = st(ctx.from.id);
+  s.level = 'admin_edit_amount';
+  s.editDepositId = String(dep._id);
+  await ctx.reply('ပြောင်းလဲလိုသော amount အားရိုက်ထည့်ပါ');
+});
+
+// legacy buttons (notifications sent before deposits were stored in MongoDB)
 bot.action(/^confirm_topup_(\d+)_(\d+)$/, async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Admin only', { show_alert: true });
   await ctx.answerCbQuery();
   const userId = ctx.match[1], amount = parseInt(ctx.match[2], 10);
-  const u = await User.findById(userId);
-  if (u) { u.balance += amount; await u.save(); }
+  await User.findByIdAndUpdate(userId, { $inc: { balance: amount } });
   await ctx.editMessageReplyMarkup(undefined).catch(() => {});
   await ctx.reply(`✅ User ${userId} အတွက် ${amount} ကျပ် အောင်မြင်စွာ ထည့်ပြီးပါပြီ။`);
   await safeSend(userId, texts.t('topup_success', { amount }));
@@ -728,14 +855,25 @@ bot.action(/^editamt_(\d+)_(\d+)$/, async (ctx) => {
 // Order placement confirmation
 // =======================================================================
 bot.action('place_order', async (ctx) => {
-  await ctx.answerCbQuery();
+  // claim the confirm step BEFORE any await, so a double tap can never place two orders
   const s = st(ctx.from.id);
-  if (s.level !== 'confirm') return;
-  const service = await Service.findById(s.serviceId);
-  const user = await User.findById(String(ctx.from.id));
-  if (!service || !user) { resetState(ctx.from.id); return ctx.reply('❌ Error, ပြန်စမ်းကြည့်ပါ။', await mainMenuKeyboard()); }
+  const wasConfirm = s.level === 'confirm';
+  if (wasConfirm) s.level = 'placing';
+  await ctx.answerCbQuery().catch(() => {});
+  if (!wasConfirm) return;
 
-  if (user.balance < s.cost) {
+  const service = await Service.findById(s.serviceId);
+  if (!service || service.active === false) { resetState(ctx.from.id); return ctx.reply('❌ Error, ပြန်စမ်းကြည့်ပါ။', await mainMenuKeyboard()); }
+
+  const uid = String(ctx.from.id);
+  // take the money first with ONE conditional update: if the balance is not
+  // enough nothing changes, and parallel orders can never overspend it
+  const charged = await User.findOneAndUpdate(
+    { _id: uid, balance: { $gte: s.cost } },
+    { $inc: { balance: -s.cost, totalSpent: s.cost } },
+    { new: true }
+  );
+  if (!charged) {
     resetState(ctx.from.id);
     const name = displayName(ctx.from);
     return ctx.reply(
@@ -747,31 +885,38 @@ bot.action('place_order', async (ctx) => {
   let providerOrderId;
   try {
     providerOrderId = await providers.placeOrder(service.provider, service.providerServiceId, s.link, s.quantity);
-    } catch (err) {
+  } catch (err) {
+    // provider refused -> give the money straight back
+    await User.findByIdAndUpdate(uid, { $inc: { balance: s.cost, totalSpent: -s.cost } });
     resetState(ctx.from.id);
     logFailure('customer order submission failed', err);
     return ctx.reply(customerError('Order ကို လက်ခံဆောင်ရွက်နေစဉ် အခက်အခဲ ဖြစ်နေပါသည်။ ခဏနေပြီး ပြန်ကြိုးစားပေးပါရှင့်။'), await mainMenuKeyboard());
   }
-  user.balance -= s.cost;
-  user.totalSpent = (user.totalSpent || 0) + s.cost;
-  await user.save();
 
-  await Order.create({
-    userId: String(ctx.from.id),
-    serviceId: service._id,
-    platform: s.platform,
-    categoryLabel: s.categoryLabel,
-    serviceLabel: s.serviceLabel,
-    provider: service.provider,
-    providerOrderId: String(providerOrderId),
-    link: s.link,
-    quantity: s.quantity,
-    cost: s.cost,
-    status: 'pending'
-  });
+  let baseCost;
+  try { baseCost = providers.calcBaseCost(service.provider, service.rate, s.quantity); } catch (_) { /* profit stat only */ }
+  try {
+    await Order.create({
+      userId: uid,
+      serviceId: service._id,
+      platform: s.platform,
+      categoryLabel: s.categoryLabel,
+      serviceLabel: s.serviceLabel,
+      provider: service.provider,
+      providerOrderId: String(providerOrderId),
+      link: s.link,
+      quantity: s.quantity,
+      cost: s.cost,
+      baseCost,
+      status: 'pending'
+    });
+  } catch (err) {
+    console.error(`Order saved at provider (${service.provider} #${providerOrderId}) but DB write failed:`, err.message);
+  }
 
+  const paid = s.cost;
   resetState(ctx.from.id);
-  await ctx.reply(texts.t('order_success', { cost: s.cost }), await mainMenuKeyboard());
+  await ctx.reply(texts.t('order_success', { cost: paid }), await mainMenuKeyboard());
 });
 
 // =======================================================================
@@ -785,17 +930,37 @@ bot.action('place_order', async (ctx) => {
 // =======================================================================
 const CANCELLED_STATUSES = ['canceled', 'cancelled'];
 
-async function refundIfCancelled(order) {
-  if (order.refunded) return; // already handled, never double-refund
-  order.refunded = true;
-  await order.save();
-  const user = await User.findById(order.userId);
-  if (user) {
-    user.balance += order.cost;
-    user.totalSpent = Math.max(0, (user.totalSpent || 0) - order.cost);
-    await user.save();
+// One atomic switch (refunded: false -> true) decides who gets to refund,
+// so the background sweep, the user's cancel button and the admin panel can
+// never pay the same order back twice.
+async function refundOrder(order, amount, kind = 'cancel') {
+  amount = Math.floor(Number(amount) || 0);
+  if (amount <= 0) return false;
+  const claimed = await Order.findOneAndUpdate(
+    { _id: order._id, refunded: { $ne: true } },
+    { refunded: true, refundAmount: amount, updatedAt: new Date() },
+    { new: true }
+  );
+  if (!claimed) return false;
+  order.refunded = true; order.refundAmount = amount;
+  await User.findByIdAndUpdate(order.userId, { $inc: { balance: amount, totalSpent: -amount } });
+  if (kind === 'partial') {
+    await safeSend(order.userId, texts.t('order_partial_refund', { remains: Math.max(0, Number(order.remains) || 0), amount }));
+  } else {
+    await safeSend(order.userId, texts.t('order_cancel_success', { cost: amount }));
   }
-  await safeSend(order.userId, texts.t('order_cancel_success', { cost: order.cost }));
+  return true;
+}
+async function refundIfCancelled(order) { return refundOrder(order, order.cost, 'cancel'); }
+
+// provider says "Partial": it delivered part of the quantity - return the
+// money for the undelivered part (remains / quantity of the price)
+async function refundIfPartial(order) {
+  const remains = Number(order.remains) || 0;
+  const quantity = Number(order.quantity) || 0;
+  if (remains <= 0 || quantity <= 0) return false;
+  const amount = Math.floor(order.cost * Math.min(remains, quantity) / quantity);
+  return refundOrder(order, amount, 'partial');
 }
 
 async function refreshOrderStatuses(orders) {
@@ -827,6 +992,8 @@ async function refreshOrderStatuses(orders) {
         }
         if (CANCELLED_STATUSES.includes(statusLower)) {
           await refundIfCancelled(o);
+        } else if (statusLower === 'partial') {
+          await refundIfPartial(o);
         }
       }
     } catch (err) {
@@ -864,7 +1031,12 @@ bot.action(/^cancel_order_([0-9a-fA-F]{24})$/, async (ctx) => {
 // crash the bot or hammer the provider API.
 async function backgroundStatusSweep() {
   try {
-    const active = await Order.find({ status: { $nin: ['completed', 'cancelled', 'error'] } }).limit(200);
+    // provider statuses arrive in mixed case ("Completed", "Canceled"...) - match case-insensitively,
+    // otherwise finished orders keep filling the 200-order window and new ones are never checked
+    const active = await Order.find({
+      status: { $not: /^(completed|canceled|cancelled|error|partial)$/i },
+      refunded: { $ne: true }
+    }).sort({ createdAt: 1 }).limit(200);
     for (const batch of chunk(active, 40)) {
       await refreshOrderStatuses(batch);
       await new Promise(r => setTimeout(r, 2000));
@@ -884,6 +1056,24 @@ function requireAdmin(ctx) {
   if (!isAdmin(ctx.from.id)) return false;
   return true;
 }
+
+// /adminlogin - sends the admin a one-time button link into the web panel.
+// Anyone who is not an admin gets NO reply at all (the command looks unknown).
+bot.command('adminlogin', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  if (!ctx.chat || ctx.chat.type !== 'private') return; // never post a login link into a group
+  if (!panel) return ctx.reply('⚠️ Admin panel မစတင်သေးပါ။');
+  const url = panel.createLoginUrl(ctx.from.id);
+  if (!url) {
+    return ctx.reply('⚠️ Panel URL မသတ်မှတ်ရသေးပါ။ Render ရဲ့ Environment ထဲမှာ PANEL_URL=https://your-app.onrender.com ထည့်ပေးပါ။');
+  }
+  const text = '🔐 Admin Panel\n\nအောက်ပါ button ကိုနှိပ်ပြီး ဝင်ပါ။ Link က ၅ မိနစ်အတွင်း တစ်ကြိမ်သာ သုံးလို့ရပါတယ် - တခြားသူကို မပို့ပါနဲ့။';
+  if (/^https:\/\//i.test(url)) {
+    return ctx.reply(text, Markup.inlineKeyboard([[Markup.button.url('🚀 Admin Panel ဝင်ရန်', url)]]));
+  }
+  // Telegram refuses non-https buttons (e.g. http://localhost during testing)
+  return ctx.reply(`${text}\n\n${url}`);
+});
 
 bot.command('ban', async (ctx) => {
   if (!requireAdmin(ctx)) return;
@@ -1400,6 +1590,38 @@ if (SELF_URL) {
 } else {
   console.log('No RENDER_EXTERNAL_URL/SELF_PING_URL set - self-ping disabled.');
 }
+
+// ---------------------------------------------------------------------
+// Web admin panel (Express) - see admin.js. Login links come from /adminlogin.
+// ---------------------------------------------------------------------
+panel = mountAdminPanel(app, {
+  bot, adminIds: ADMIN_IDS, isAdmin, safeSend, startBroadcast, sanitizeName, toBoldUnicode,
+  approveDeposit, rejectDeposit, refundOrder, refundIfPartial, refreshOrderStatuses, priceFor
+});
+
+// Warn the admins in Telegram when a provider account runs low, so orders
+// never start failing silently. Alerts once per drop (not every 30 minutes).
+const lowAlerted = {};
+async function lowBalanceSweep() {
+  const threshold = Number(texts.t('low_balance_threshold')) || 0;
+  if (!threshold) return;
+  for (const provider of Object.keys(providers.CONFIG)) {
+    const c = providers.CONFIG[provider];
+    if (!c.url || !c.key) continue;
+    try {
+      const res = await providers.getBalance(provider);
+      const bal = Number(res && res.balance);
+      if (!Number.isFinite(bal)) continue;
+      if (bal < threshold && !lowAlerted[provider]) {
+        lowAlerted[provider] = true;
+        for (const id of ADMIN_IDS) await safeSend(id, `⚠️ ${provider} လက်ကျန်ငွေ နည်းနေပါပြီ: ${bal} ${res.currency || ''}\n(သတ်မှတ်ထားသော အနိမ့်ဆုံး: ${threshold}) - ငွေဖြည့်ပေးပါ။`);
+      } else if (bal >= threshold) {
+        lowAlerted[provider] = false;
+      }
+    } catch (_) { /* provider unreachable - the panel dashboard shows the error */ }
+  }
+}
+setInterval(() => { lowBalanceSweep(); }, 30 * 60 * 1000);
 
 mongoose.connect(MONGODB_URI).then(async () => {
   console.log('MongoDB connected');

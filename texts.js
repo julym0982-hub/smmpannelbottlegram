@@ -20,6 +20,7 @@ const DEFAULTS = {
   order_success: '✅ Order တင်ပြီးပါပြီရှင့် (${cost} ကျပ် နှုတ်ယူပြီးပါပြီ)',
   order_complete: '${link} ဝယ်ယူထားတဲ့ ${service} type က complete ဖြစ်သွားပါပြီရှင့်\nဝယ်ယူမှုအတွက် ကျေးဇူးတင်ပါတယ်ရှင့် ❤️',
   order_cancel_success: '✅ Order ကို cancel လုပ်ပြီး cashback ${cost} ကျပ် ပြန်ထည့်ပေးလိုက်ပါပြီရှင့်',
+  order_partial_refund: '⚠️ Order က တစ်စိတ်တစ်ပိုင်းသာ ပြီးမြောက်ခဲ့ပါတယ်ရှင့်။ မပြီးမြောက်ခဲ့တဲ့ ${remains} ခုအတွက် cashback ${amount} ကျပ် ပြန်ထည့်ပေးလိုက်ပါပြီ ❤️',
   order_cancel_fail: 'Order ဆောင်ရွက်လျက်ရှိပါတယ်ရှင့်၊ cancel လုပ်၍ မရတော့ပါ',
   topup_min_amount: process.env.TOPUP_MIN_AMOUNT || '1000', // plain number, not a template
   // provider pricing knobs - plain numbers, not templates. Changeable live
@@ -30,12 +31,15 @@ const DEFAULTS = {
   secsers_markup: process.env.SECSERS_MARKUP_MULTIPLIER || '1',
   hiroshi_usd_to_mmk: process.env.HIROSHI_USD_TO_MMK || '4400',
   hiroshi_markup: process.env.HIROSHI_MARKUP_MULTIPLIER || '2.3',
+  low_balance_threshold: process.env.LOW_BALANCE_THRESHOLD || '5', // provider balance (USD) below which admins get a Telegram warning; 0 = off
   topup_min: 'အနည်းဆုံး ${min} ကျပ်မှ စဖြည့်ပါရှင့် ❤️',
   topup_below_min: 'အနည်းဆုံး ${min}ကျပ်မှ ငွေစသွင်းပါရှင့်♥️',
   topup_ask_screenshot: 'ဆီသို့ ငွေလွှဲပြီး screenshot ပို့ပေးပါရှင့်',
   topup_ask_amount: 'ငွေထည့်ထားတဲ့ ပမာဏလေး ရေးပေးပါရှင့် ❤️',
   topup_submitted: 'Admin သို့ ငွေလွှဲထားကြောင်း တင်ပြပေးထားပါတယ်ရှင့် 😊\nခေတ္တခဏ စောင့်ပေးပါနော်',
   topup_success: 'ငွေ (${amount} ကျပ်) ထည့်ခြင်း အောင်မြင်ပါသည်ရှင့် ❤️',
+  topup_rejected: '❌ သင့်ငွေဖြည့်တောင်းဆိုမှု (${amount} ကျပ်) ကို လက်မခံနိုင်ပါရှင့်။${reason}\nမှားယွင်းနေသည်ဟု ထင်ပါက Admin ကို ဆက်သွယ်ပေးပါနော်။',
+  topup_edited: 'သင်ဖြည့်ထားသောငွေပမာဏမှာ ${amount} ဖြစ်သောကြောင့် သင့်အကောင့်ထဲသို့ ${amount} ကျပ် ထည့်ပေးထားပါတယ်ရှင့် ❤️',
   banned: 'သင့်အကောင့်ကို ယာယီ ပိတ်ထားပါသည်ရှင့်။ Admin ကို ဆက်သွယ်ပါ။'
 };
 
@@ -63,8 +67,14 @@ async function setText(key, value) {
   await Setting.findByIdAndUpdate(key, { _id: key, value }, { upsert: true });
 }
 
+// back to the built-in default (removes the saved override from MongoDB)
+async function resetText(key) {
+  delete cache[key];
+  await Setting.findByIdAndDelete(key);
+}
+
 function allKeys() {
   return Object.keys(DEFAULTS);
 }
 
-module.exports = { t, setText, preload, allKeys, DEFAULTS };
+module.exports = { t, getRaw, setText, resetText, preload, allKeys, DEFAULTS };

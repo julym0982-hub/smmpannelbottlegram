@@ -7,6 +7,8 @@ const UserSchema = new mongoose.Schema({
   balance: { type: Number, default: 0 },
   totalSpent: { type: Number, default: 0 },
   banned: { type: Boolean, default: false },
+  discount: { type: Number, default: 0, min: 0, max: 100 }, // personal reseller discount in % (set from the admin panel)
+  note: String, // private admin note, never shown to the user
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -46,6 +48,7 @@ const ServiceSchema = new mongoose.Schema({
   min: Number,
   max: Number,
   avgTime: String,
+  active: { type: Boolean, default: true }, // admin panel can hide a service without deleting it
   manualDuration: String, // admin-set override, e.g. "18 မိနစ်" - used when the provider API gives no duration at all (ShweBoost never does)
   lastSynced: Date,
   createdAt: { type: Date, default: Date.now }
@@ -70,6 +73,8 @@ const OrderSchema = new mongoose.Schema({
   link: String,
   quantity: Number,
   cost: Number, // MMK charged to the user's balance
+  baseCost: Number, // MMK the provider charges us (before markup) - used for profit stats
+  refundAmount: { type: Number, default: 0 }, // MMK returned to the user (cancel / partial)
   status: { type: String, default: 'pending', index: true }, // pending/in progress/completed/cancelled/partial/error
   refunded: { type: Boolean, default: false }, // guards against double refund on cancel
   startCount: Number,
@@ -94,7 +99,34 @@ const SettingSchema = new mongoose.Schema({
   value: String
 });
 
+// Every top-up request is stored so it can be accepted / rejected / edited
+// from BOTH the Telegram admin notification and the web admin panel. The
+// atomic pending -> approved/rejected transition is what prevents a
+// double credit when both places are clicked.
+const DepositSchema = new mongoose.Schema({
+  userId: { type: String, required: true, index: true },
+  method: String, // KPay / Wave
+  amount: { type: Number, required: true }, // amount the user claims (or the admin edited it to)
+  requestedAmount: Number, // original amount typed by the user
+  screenshotFileId: String,
+  status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending', index: true },
+  handledBy: String, // "panel" or "bot:<adminTelegramId>"
+  note: String, // reject reason
+  adminMessages: { type: [{ chatId: String, messageId: Number }], default: [] }, // Telegram notifications to refresh once handled
+  createdAt: { type: Date, default: Date.now, index: true },
+  handledAt: Date
+});
+
+const AdminLogSchema = new mongoose.Schema({
+  admin: String,
+  action: String,
+  detail: String,
+  createdAt: { type: Date, default: Date.now, index: true }
+});
+
 module.exports = {
+  Deposit: mongoose.model('Deposit', DepositSchema),
+  AdminLog: mongoose.model('AdminLog', AdminLogSchema),
   MenuButton: mongoose.model('MenuButton', MenuButtonSchema),
   Platform: mongoose.model('Platform', PlatformSchema),
   User: mongoose.model('User', UserSchema),
