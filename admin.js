@@ -9,7 +9,9 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const axios = require('axios');
-const { Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, MenuButton } = require('./models');
+const { Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, MenuButton, HelpRequest, Stat } = require('./models');
+const mongoose = require('mongoose');
+const retention = require('./retention');
 const providers = require('./providers');
 const texts = require('./texts');
 
@@ -89,6 +91,8 @@ const STATUS_FILTERS = {
 };
 const SETTABLE_STATUS = { pending: 'pending', processing: 'Processing', 'in progress': 'In progress', completed: 'Completed', partial: 'Partial', canceled: 'Canceled' };
 
+// feature switches + retention knobs (shown on the Settings > Data tab, not as bot messages)
+const FEATURE_KEYS = ['help_enabled', 'history_auto', 'history_keep_days', 'history_keep_last', 'history_last_cleanup'];
 const PAYMENT_KEYS = ['kpay_number', 'kpay_name', 'wave_number', 'wave_name', 'topup_min_amount', 'low_balance_threshold'];
 const NUMERIC_KEYS = () => [
   'topup_min_amount', 'low_balance_threshold',
@@ -227,7 +231,7 @@ module.exports = function mountAdminPanel(app, deps) {
   api.get('/dashboard', wrap(async (req, res) => {
     const today = startOfTodayMMT();
     const since = new Date(today.getTime() - 13 * 86400000);
-    const [usersTotal, usersToday, bannedCount, ordersTotal, pendingDeposits, problemOrders, depToday, series, liability] = await Promise.all([
+    const [usersTotal, usersToday, bannedCount, ordersTotal, pendingDeposits, problemOrders, depToday, series, liability, openHelp, statTotal, statRows] = await Promise.all([
       User.countDocuments(),
       User.countDocuments({ createdAt: { $gte: today } }),
       User.countDocuments({ banned: true }),
@@ -236,10 +240,18 @@ module.exports = function mountAdminPanel(app, deps) {
       Order.countDocuments({ status: PROBLEM, refunded: { $ne: true } }),
       Deposit.aggregate([{ $match: { status: 'approved', handledAt: { $gte: today } } }, { $group: { _id: null, sum: { $sum: '$amount' }, n: { $sum: 1 } } }]),
       dailySeries(since),
-      User.aggregate([{ $group: { _id: null, sum: { $sum: '$balance' } } }])
+      User.aggregate([{ $group: { _id: null, sum: { $sum: '$balance' } } }]),
+      HelpRequest.countDocuments({ status: 'open' }),
+      Stat.aggregate([{ $group: { _id: null, n: { $sum: '$orders' } } }]),
+      Stat.find({ _id: { $gte: dayKey(since) } }).lean()
     ]);
 
-    const byDay = Object.fromEntries(series.map(r => [r._id, r]));
+    const byDay = Object.fromEntries(series.map(r => [r._id, { ...r }]));
+    // orders already removed by history cleanup are kept as daily totals
+    for (const st of statRows) {
+      const r = byDay[st._id] || (byDay[st._id] = { _id: st._id, orders: 0, revenue: 0, profit: 0 });
+      r.orders += st.orders || 0; r.revenue += st.revenue || 0; r.profit += st.profit || 0;
+    }
     const days = [];
     for (let i = 13; i >= 0; i--) {
       const k = dayKey(new Date(today.getTime() - i * 86400000));
@@ -250,10 +262,10 @@ module.exports = function mountAdminPanel(app, deps) {
     const week = days.slice(-7).reduce((a, d) => ({ orders: a.orders + d.orders, revenue: a.revenue + d.revenue, profit: a.profit + d.profit }), { orders: 0, revenue: 0, profit: 0 });
     res.json({
       users: { total: usersTotal, today: usersToday, banned: bannedCount },
-      orders: { total: ordersTotal, today: t.orders },
+      orders: { total: ordersTotal + (statTotal[0] ? statTotal[0].n : 0), today: t.orders },
       today: { revenue: t.revenue, profit: t.profit, deposits: depToday[0] ? depToday[0].sum : 0, depositCount: depToday[0] ? depToday[0].n : 0 },
       week,
-      alerts: { pendingDeposits, problemOrders },
+      alerts: { pendingDeposits, problemOrders, openHelp },
       userBalances: liability[0] ? liability[0].sum : 0,
       days
     });
@@ -261,11 +273,12 @@ module.exports = function mountAdminPanel(app, deps) {
 
   // light endpoint polled by the UI every few seconds for the notification badge
   api.get('/alerts', wrap(async (req, res) => {
-    const [pendingDeposits, latest] = await Promise.all([
+    const [pendingDeposits, latest, openHelp] = await Promise.all([
       Deposit.countDocuments({ status: 'pending' }),
-      Deposit.findOne({ status: 'pending' }).sort({ createdAt: -1 }).select('_id createdAt').lean()
+      Deposit.findOne({ status: 'pending' }).sort({ createdAt: -1 }).select('_id createdAt').lean(),
+      HelpRequest.countDocuments({ status: 'open' })
     ]);
-    res.json({ pendingDeposits, latestPendingId: latest ? String(latest._id) : null });
+    res.json({ pendingDeposits, openHelp, latestPendingId: latest ? String(latest._id) : null });
   }));
 
   let balCache = { at: 0, data: null };
@@ -463,7 +476,7 @@ module.exports = function mountAdminPanel(app, deps) {
     if (STATUS_FILTERS[req.query.status]) filter.status = STATUS_FILTERS[req.query.status];
     const q = str(req.query.q || '', 'search', { max: 200, required: false });
     if (q) {
-      if (/^\d+$/.test(q)) filter.userId = q;
+      if (/^#?\d+$/.test(q)) { const n = q.replace('#', ''); filter.$or = [{ userId: n }, { orderNo: Number(n) }, { providerOrderId: n }]; }
       else if (isOid(q)) filter._id = q;
       else filter.link = new RegExp(escapeRegex(q), 'i');
     }
@@ -475,7 +488,7 @@ module.exports = function mountAdminPanel(app, deps) {
     res.json({
       total, page, pages: Math.max(1, Math.ceil(total / PAGE)),
       items: rows.map(o => ({
-        id: String(o._id), shortId: String(o._id).slice(-6), userId: o.userId, userName: userLabel(users[o.userId], o.userId),
+        id: String(o._id), shortId: o.orderNo ? String(o.orderNo) : String(o._id).slice(-6), orderNo: o.orderNo || null, userId: o.userId, userName: userLabel(users[o.userId], o.userId),
         label: `${o.categoryLabel || ''} ${o.serviceLabel || ''}`.trim(), link: o.link, quantity: o.quantity,
         cost: o.cost, baseCost: o.baseCost == null ? null : o.baseCost, status: o.status, remains: o.remains, startCount: o.startCount,
         provider: o.provider, providerOrderId: o.providerOrderId, refunded: !!o.refunded, refundAmount: o.refundAmount || 0,
@@ -770,12 +783,13 @@ module.exports = function mountAdminPanel(app, deps) {
       pricing[p] = { usd_to_mmk: texts.t(`${p}_usd_to_mmk`), markup: texts.t(`${p}_markup`), configured: !!(providers.CONFIG[p].url && providers.CONFIG[p].key) };
     }
     const payment = Object.fromEntries(PAYMENT_KEYS.map(k => [k, texts.t(k)]));
-    const hidden = new Set([...PAYMENT_KEYS, ...NUMERIC_KEYS()]);
+    const hidden = new Set([...PAYMENT_KEYS, ...NUMERIC_KEYS(), ...FEATURE_KEYS]);
     const messages = texts.allKeys().filter(k => !hidden.has(k)).map(k => ({
       key: k, value: texts.getRaw(k), isDefault: texts.getRaw(k) === texts.DEFAULTS[k], placeholders: [...new Set((texts.DEFAULTS[k].match(/\$\{\w+\}/g) || []))]
     }));
+    const features = Object.fromEntries(FEATURE_KEYS.map(k => [k, texts.t(k)]));
     const buttons = await MenuButton.find({}).sort({ createdAt: 1 }).lean();
-    res.json({ pricing, payment, messages, menuButtons: buttons.map(b => ({ label: String(b._id), url: b.url })) });
+    res.json({ pricing, payment, features, messages, menuButtons: buttons.map(b => ({ label: String(b._id), url: b.url })) });
   }));
 
   api.post('/settings', wrap(async (req, res) => {
@@ -786,10 +800,15 @@ module.exports = function mountAdminPanel(app, deps) {
     if (!entries.length || entries.length > 40) throw fail(400, 'values မမှန်ပါ');
     // validate everything first so a bad value never leaves a half-applied change
     for (const [k, v] of entries) {
-      if (!texts.allKeys().includes(k)) throw fail(400, `"${k}" ဆိုတဲ့ key မရှိပါ`);
+      if (!texts.allKeys().includes(k) || k === 'history_last_cleanup') throw fail(400, `"${k}" ဆိုတဲ့ key မရှိပါ`);
       if (typeof v !== 'string' && typeof v !== 'number') throw fail(400, `${k} မမှန်ပါ`);
       const sv = String(v).trim();
-      if (numeric.has(k)) {
+      if (k === 'help_enabled' || k === 'history_auto') {
+        if (!['0', '1'].includes(sv)) throw fail(400, `${k} သည် 0 သို့မဟုတ် 1 ဖြစ်ရမည်`);
+      } else if (k === 'history_keep_days' || k === 'history_keep_last') {
+        const n = Number(sv);
+        if (!Number.isInteger(n) || n < (k === 'history_keep_days' ? 1 : 0) || n > 365) throw fail(400, `${k} မမှန်ပါ`);
+      } else if (numeric.has(k)) {
         const n = Number(sv);
         const mustBePositive = k.endsWith('_usd_to_mmk') || k.endsWith('_markup') || k === 'topup_min_amount';
         if (!sv || !Number.isFinite(n) || n < 0 || (mustBePositive && n <= 0)) throw fail(400, `${k} သည် မှန်ကန်သော ဂဏန်း ဖြစ်ရမည်`);
@@ -824,6 +843,70 @@ module.exports = function mountAdminPanel(app, deps) {
     if (!removed) throw fail(404, 'Button မတွေ့ပါ');
     log(req, 'menu_button_delete', removed._id);
     res.json({ ok: true });
+  }));
+
+  // ======================================================================
+  // Help Order requests (refill / speed up / cancel from the bot)
+  // ======================================================================
+  api.get('/help', wrap(async (req, res) => {
+    const status = req.query.status === 'done' ? 'done' : 'open';
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const [total, rows] = await Promise.all([
+      HelpRequest.countDocuments({ status }),
+      HelpRequest.find({ status }).sort({ createdAt: status === 'open' ? 1 : -1 }).skip((page - 1) * PAGE).limit(PAGE).lean()
+    ]);
+    const users = await withUsers(rows);
+    const orders = await Order.find({ _id: { $in: rows.map(r => r.orderId).filter(isOid) } }).lean();
+    const byId = Object.fromEntries(orders.map(o => [String(o._id), o]));
+    res.json({
+      total, page, pages: Math.max(1, Math.ceil(total / PAGE)),
+      items: rows.map(h => {
+        const o = byId[h.orderId] || {};
+        return {
+          id: String(h._id), type: h.type, status: h.status, auto: !!h.auto, result: h.result || '', createdAt: h.createdAt,
+          userId: h.userId, userName: userLabel(users[h.userId], h.userId), orderNo: h.orderNo || null,
+          provider: h.provider, providerOrderId: h.providerOrderId,
+          label: `${o.categoryLabel || ''} ${o.serviceLabel || ''}`.trim(), link: o.link || '', quantity: o.quantity, orderStatus: o.status || 'deleted'
+        };
+      })
+    });
+  }));
+  api.post('/help/:id/done', wrap(async (req, res) => {
+    if (!isOid(req.params.id)) throw fail(404, 'not found');
+    const h = await HelpRequest.findOneAndUpdate({ _id: req.params.id, status: 'open' }, { status: 'done', doneAt: new Date() }, { new: true });
+    if (!h) throw fail(409, 'ကိုင်တွယ်ပြီးသား (သို့) မတွေ့ပါ');
+    const custom = str(req.body.message, 'Message', { max: 1000, required: false });
+    if (req.body.notify !== false) await safeSend(h.userId, custom || texts.t('help_done', { orderNo: h.orderNo || '' }));
+    log(req, 'help_done', `#${h.orderNo} ${h.type}`);
+    res.json({ ok: true });
+  }));
+  api.delete('/help/:id', wrap(async (req, res) => {
+    if (!isOid(req.params.id)) throw fail(404, 'not found');
+    const h = await HelpRequest.findByIdAndDelete(req.params.id);
+    if (!h) throw fail(404, 'မတွေ့ပါ');
+    res.json({ ok: true });
+  }));
+
+  // ======================================================================
+  // Data & storage: collection sizes + history cleanup (preview / run now)
+  // ======================================================================
+  api.get('/data', wrap(async (req, res) => {
+    const [orders, users, deposits, help, logs, stats] = await Promise.all([
+      Order.countDocuments(), User.countDocuments(), Deposit.countDocuments(), HelpRequest.countDocuments(), AdminLog.countDocuments(), Stat.countDocuments()
+    ]);
+    let storage = null;
+    try {
+      const st = await mongoose.connection.db.stats();
+      storage = { dataMB: +(st.dataSize / 1048576).toFixed(1), storageMB: +((st.storageSize || st.dataSize) / 1048576).toFixed(1), limitMB: 512 };
+    } catch (_) { /* not available on every deployment */ }
+    const last = texts.t('history_last_cleanup');
+    res.json({ counts: { orders, users, deposits, help, logs, stats }, storage, lastCleanup: last || null, ...retention.settings() });
+  }));
+  api.post('/data/cleanup', wrap(async (req, res) => {
+    const dryRun = req.body.dryRun !== false;
+    const r = await retention.runCleanup({ dryRun });
+    if (!dryRun) log(req, 'history_cleanup', `orders ${r.orders}, deposits ${r.deposits}, help ${r.help}, logs ${r.logs}`);
+    res.json({ ok: true, dryRun, ...r });
   }));
 
   api.get('/logs', wrap(async (req, res) => {

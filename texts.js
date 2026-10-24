@@ -32,6 +32,24 @@ const DEFAULTS = {
   hiroshi_usd_to_mmk: process.env.HIROSHI_USD_TO_MMK || '4400',
   hiroshi_markup: process.env.HIROSHI_MARKUP_MULTIPLIER || '2.3',
   low_balance_threshold: process.env.LOW_BALANCE_THRESHOLD || '5', // provider balance (USD) below which admins get a Telegram warning; 0 = off
+  // ---- feature switches / retention (plain values, edited from the panel)
+  help_enabled: '1', // 1 = "Order အကူအညီ" button visible to users, 0 = hidden
+  history_auto: '1', // 1 = old finished orders are cleaned automatically every day
+  history_keep_days: '5', // finished orders older than this many days are removed...
+  history_keep_last: '6', // ...except each user's newest N orders, which always stay
+  history_last_cleanup: '',
+  // ---- Help Order messages
+  help_ask_id: '🆘 Order အကူအညီ\n\nအကူအညီလိုတဲ့ Order ID ကို ရိုက်ထည့်ပေးပါရှင့်၊ (သို့) အောက်က နောက်ဆုံး order တွေထဲကနေ ရွေးပါ 👇',
+  help_choose: 'ဘာလေးအဆင်မပြေလဲ ရွေးပေးပါရှင့် ⬇️',
+  help_refill_ok: '✅ ပြန်ဖြည့်ပေးရန် စတင်နေပါပြီရှင့်။\n♻️ သင့် Order အား 24 နာရီအတွင်း ပြန်ဖြည့်ပေးပါမည် ❤️',
+  help_manual: '✅ တောင်းဆိုမှု လက်ခံပြီးပါပြီရှင့်။ Admin က 24 နာရီအတွင်း ဆောင်ရွက်ပေးပါမယ်၊ ခဏစောင့်ပေးပါနော် ❤️',
+  help_speed_done: 'အော်ဒါသည် ပြီးဆုံးသွားပြီဖြစ်သောကြောင့် အမြန်နှုန်းမြှင့်တင်ခြင်း ဆောင်ရွက်ပေးလို့ မရပါရှင့်။',
+  help_refill_not_done: 'Order မပြီးသေးသောကြောင့် ပြန်ဖြည့်ပေးရန် မလိုသေးပါရှင့်။ ပြီးဆုံးပြီးနောက် ပြန်ကျသွားရင် တောင်းဆိုပေးပါနော်။',
+  help_cancelled: 'ဒီ Order ကို ပယ်ဖျက်ပြီးသားဖြစ်လို့ ဆောင်ရွက်လို့ မရပါရှင့်။',
+  help_not_found: '❌ ဒီ Order ID မတွေ့ပါရှင့်။ ကိုယ်မှာထားတဲ့ Order ID ကို ပြန်စစ်ပေးပါနော်။',
+  help_cooldown: 'ℹ️ ဒီ Order အတွက် တောင်းဆိုမှု လက်ခံထားပြီးသားပါရှင့်၊ ခဏစောင့်ပေးပါနော်။',
+  help_disabled: 'ဒီဝန်ဆောင်မှုကို ခေတ္တပိတ်ထားပါသည်ရှင့်။',
+  help_done: '✅ သင့် Order #${orderNo} အတွက် တောင်းဆိုမှုကို ဆောင်ရွက်ပြီးပါပြီရှင့် ❤️',
   topup_min: 'အနည်းဆုံး ${min} ကျပ်မှ စဖြည့်ပါရှင့် ❤️',
   topup_below_min: 'အနည်းဆုံး ${min}ကျပ်မှ ငွေစသွင်းပါရှင့်♥️',
   topup_ask_screenshot: 'ဆီသို့ ငွေလွှဲပြီး screenshot ပို့ပေးပါရှင့်',

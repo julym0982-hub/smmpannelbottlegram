@@ -63,6 +63,7 @@ const MenuButtonSchema = new mongoose.Schema({
 });
 
 const OrderSchema = new mongoose.Schema({
+  orderNo: { type: Number, index: true }, // short sequential id the CUSTOMER sees and types in Help Order (provider ids stay hidden)
   userId: { type: String, required: true, index: true },
   serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' },
   platform: String,
@@ -124,7 +125,38 @@ const AdminLogSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now, index: true }
 });
 
+// "Help Order" requests (refill / speed up / cancel) - kept so the admin can
+// follow them up from the panel, and so a user cannot spam the same request.
+const HelpRequestSchema = new mongoose.Schema({
+  orderId: { type: String, index: true },
+  orderNo: Number,
+  userId: { type: String, index: true },
+  type: { type: String, enum: ['refill', 'speed', 'cancel'] },
+  status: { type: String, enum: ['open', 'done'], default: 'open', index: true },
+  auto: { type: Boolean, default: false }, // true = already sent to the provider API automatically
+  result: String, // short note about what happened
+  provider: String,
+  providerOrderId: String,
+  createdAt: { type: Date, default: Date.now, index: true },
+  doneAt: Date
+});
+
+// atomic counters (order numbers)
+const CounterSchema = new mongoose.Schema({ _id: { type: String }, seq: { type: Number, default: 0 } });
+
+// Daily totals of orders that history cleanup has already deleted - so the
+// dashboard numbers stay correct after old orders are removed.
+const StatSchema = new mongoose.Schema({
+  _id: { type: String }, // YYYY-MM-DD (Myanmar time)
+  orders: { type: Number, default: 0 },
+  revenue: { type: Number, default: 0 },
+  profit: { type: Number, default: 0 }
+});
+
 module.exports = {
+  HelpRequest: mongoose.model('HelpRequest', HelpRequestSchema),
+  Counter: mongoose.model('Counter', CounterSchema),
+  Stat: mongoose.model('Stat', StatSchema),
   Deposit: mongoose.model('Deposit', DepositSchema),
   AdminLog: mongoose.model('AdminLog', AdminLogSchema),
   MenuButton: mongoose.model('MenuButton', MenuButtonSchema),

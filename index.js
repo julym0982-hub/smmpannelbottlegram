@@ -2,10 +2,11 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const { Telegraf, Markup } = require('telegraf');
-const { MenuButton, Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog } = require('./models');
+const { MenuButton, Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, HelpRequest, Counter } = require('./models');
 const providers = require('./providers');
 const texts = require('./texts');
 const mountAdminPanel = require('./admin');
+const retention = require('./retention');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -117,10 +118,37 @@ const BTN_TOPUP = '💰ငွေဖြည့်ရန်💰';
 const BTN_HISTORY = '📜Order History📜';
 const BTN_COUPON = 'Cupon⁉️';
 const BTN_BACK = '◀️ နောက်ပြန်ဆုတ်ရန်';
+const BTN_HELP = '🆘 Order အကူအညီ';
+
+// HTML-safe text for messages that contain user-provided strings (links, names)
+function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+const nf = (n) => Number(n || 0).toLocaleString('en-US');
+const helpOn = () => texts.t('help_enabled') !== '0';
+const shorten = (t, n = 48) => (String(t).length > n ? String(t).slice(0, n) + '…' : String(t));
+const STATUS_ICON = { completed: '🟢', pending: '🟡', processing: '🟡', 'in progress': '🟡', partial: '🟠', canceled: '🔴', cancelled: '🔴', error: '🔴' };
+const statusIcon = (st) => STATUS_ICON[String(st || '').toLowerCase()] || '⚪';
+// customer-facing order number (tap to copy in Telegram thanks to <code>)
+const orderRef = (o) => (o.orderNo ? String(o.orderNo) : String(o._id).slice(-6));
+
+// next sequential order number (10001, 10002, ...) - atomic
+async function nextOrderNo() {
+  const c = await Counter.findOneAndUpdate({ _id: 'orderNo' }, { $inc: { seq: 1 } }, { new: true, upsert: true });
+  return 10000 + c.seq;
+}
+// orders created before order numbers existed get one (oldest first)
+async function migrateOrderNos() {
+  for (let i = 0; i < 20; i++) {
+    const old = await Order.find({ orderNo: { $exists: false } }).sort({ createdAt: 1 }).limit(500);
+    if (!old.length) return;
+    for (const o of old) { o.orderNo = await nextOrderNo(); await o.save(); }
+  }
+}
 
 async function mainMenuKeyboard() {
   const extras = await MenuButton.find({});
-  const rows = [[BTN_SERVICES], [BTN_BALANCE], [BTN_TOPUP], [BTN_HISTORY], [BTN_COUPON]];
+  const rows = [[BTN_SERVICES], [BTN_BALANCE], [BTN_TOPUP], [BTN_HISTORY]];
+  if (helpOn()) rows.push([BTN_HELP]);
+  rows.push([BTN_COUPON]);
   for (const b of extras) rows.push([b._id]);
   return Markup.keyboard(rows).resize();
 }
@@ -390,27 +418,48 @@ bot.hears(BTN_BALANCE, async (ctx) => {
 
 bot.hears(BTN_TOPUP, async (ctx) => { resetState(ctx.from.id); await ctx.reply('ငွေဖြည့်မည့် နည်းလမ်း ရွေးပါရှင့် ❤️', topupMethodKeyboard()); });
 
-bot.hears(BTN_HISTORY, async (ctx) => {
-  const orders = await Order.find({ userId: String(ctx.from.id) }).sort({ createdAt: -1 }).limit(10);
-  if (!orders.length) return ctx.reply('📜 Order မှတ်တမ်း မရှိသေးပါရှင့်။');
+// paginated, tidy order history (5 per page) with copyable order numbers
+async function sendHistory(ctx, page = 1, edit = false) {
+  const uid = String(ctx.from.id);
+  const per = 5;
+  const total = await Order.countDocuments({ userId: uid });
+  if (!total) { return ctx.reply('📜 Order မှတ်တမ်း မရှိသေးပါရှင့်။'); }
+  const pages = Math.ceil(total / per);
+  page = Math.min(Math.max(1, page), pages);
+  const orders = await Order.find({ userId: uid }).sort({ createdAt: -1 }).skip((page - 1) * per).limit(per);
   await refreshOrderStatuses(orders).catch(err => console.error('refresh error', err.message));
 
-  const lines = ['📜 Order History (နောက်ဆုံး 10 ခု)\n'];
-  const cancelButtons = [];
-  orders.forEach((o, i) => {
-    const shortId = o._id.toString().slice(-6);
+  const lines = [`📜 <b>Order History</b>  (${page}/${pages})\n<i>Order ID ကို နှိပ်ရင် copy ကူးလို့ရပါတယ်</i>\n`];
+  const rows = [];
+  for (const o of orders) {
+    const ref = orderRef(o);
     lines.push(
-      `${i + 1}) #${shortId} — ${o.categoryLabel || ''} ${o.serviceLabel || ''}\n` +
-      `   Qty: ${o.quantity} | ကုန်ကျ: ${o.cost} ကျပ် | Status: ${o.status}` +
-      (o.remains != null ? ` | ကျန်: ${o.remains}` : '')
+      `${statusIcon(o.status)} <code>${ref}</code> · <b>${esc(`${o.categoryLabel || ''} ${o.serviceLabel || ''}`.trim())}</b>\n` +
+      `   🔢 ${nf(o.quantity)}  ·  💰 ${nf(o.cost)} ကျပ်  ·  ${esc(o.status)}${o.remains != null && Number(o.remains) > 0 ? `  ·  ကျန် ${nf(o.remains)}` : ''}\n` +
+      `   🔗 ${esc(shorten(o.link))}`
     );
-    const cancellable = ['pending', 'in progress', 'processing'].includes(String(o.status).toLowerCase());
-    if (cancellable) cancelButtons.push([Markup.button.callback(`❌ Cancel #${shortId}`, `cancel_order_${o._id}`)]);
-  });
-
-  const kb = cancelButtons.length ? Markup.inlineKeyboard(cancelButtons) : undefined;
-  await ctx.reply(lines.join('\n\n'), kb);
-});
+    const btns = [];
+    if (helpOn()) btns.push(Markup.button.callback(`🆘 Help #${ref}`, `help_o_${o._id}`));
+    if (['pending', 'in progress', 'processing'].includes(String(o.status).toLowerCase())) btns.push(Markup.button.callback(`❌ Cancel #${ref}`, `cancel_order_${o._id}`));
+    if (btns.length) rows.push(btns);
+  }
+  if (pages > 1) {
+    const nav = [];
+    if (page > 1) nav.push(Markup.button.callback('◀️ နောက်', `hist_${page - 1}`));
+    nav.push(Markup.button.callback(`${page}/${pages}`, 'noop'));
+    if (page < pages) nav.push(Markup.button.callback('ရှေ့ ▶️', `hist_${page + 1}`));
+    rows.push(nav);
+  }
+  const extra = { parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: Markup.inlineKeyboard(rows).reply_markup };
+  const text = lines.join('\n\n');
+  if (edit) {
+    try { return await ctx.editMessageText(text, extra); } catch (_) { /* unchanged / too old - send a new one */ }
+  }
+  return ctx.reply(text, extra);
+}
+bot.hears(BTN_HISTORY, async (ctx) => { resetState(ctx.from.id); await sendHistory(ctx, 1); });
+bot.action(/^hist_(\d+)$/, async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await sendHistory(ctx, parseInt(ctx.match[1], 10), true); });
+bot.action('noop', (ctx) => ctx.answerCbQuery().catch(() => {}));
 
 bot.hears(BTN_COUPON, async (ctx) => { st(ctx.from.id).level = 'coupon'; await ctx.reply('🎁 Cupon code ကို ရိုက်ထည့်ပေးပါရှင့်'); });
 
@@ -547,6 +596,16 @@ bot.on('text', async (ctx, next) => {
       Markup.inlineKeyboard([[Markup.button.callback('✅ ဝယ်ယူမည်', 'place_order')]])
     );
     return;
+  }
+
+  // ---- help order: customer types an Order ID ----
+  if (s.level === 'help_id') {
+    if (!helpOn()) { resetState(ctx.from.id); return ctx.reply(texts.t('help_disabled')); }
+    const no = parseInt(text.replace(/^#/, ''), 10);
+    const order = /^#?\d{1,12}$/.test(text) ? await Order.findOne({ orderNo: no, userId: String(ctx.from.id) }) : null;
+    if (!order) return ctx.reply(texts.t('help_not_found'));
+    resetState(ctx.from.id);
+    return showHelpCard(ctx, order);
   }
 
   // ---- coupon redeem ----
@@ -893,10 +952,12 @@ bot.action('place_order', async (ctx) => {
     return ctx.reply(customerError('Order ကို လက်ခံဆောင်ရွက်နေစဉ် အခက်အခဲ ဖြစ်နေပါသည်။ ခဏနေပြီး ပြန်ကြိုးစားပေးပါရှင့်။'), await mainMenuKeyboard());
   }
 
-  let baseCost;
+  let baseCost, orderNo;
   try { baseCost = providers.calcBaseCost(service.provider, service.rate, s.quantity); } catch (_) { /* profit stat only */ }
+  try { orderNo = await nextOrderNo(); } catch (err) { console.error('order number failed (will be filled in later):', err.message); }
   try {
     await Order.create({
+      orderNo,
       userId: uid,
       serviceId: service._id,
       platform: s.platform,
@@ -916,7 +977,10 @@ bot.action('place_order', async (ctx) => {
 
   const paid = s.cost;
   resetState(ctx.from.id);
-  await ctx.reply(texts.t('order_success', { cost: paid }), await mainMenuKeyboard());
+  await ctx.reply(
+    `${esc(texts.t('order_success', { cost: nf(paid) }))}\n\n🆔 Order ID: <code>${orderNo || '-'}</code>\n<i>(နှိပ်ရင် copy ကူးလို့ရပါတယ်၊ အကူအညီလိုရင် 🆘 Order အကူအညီ မှာ သုံးပါ)</i>`,
+    { parse_mode: 'HTML', reply_markup: (await mainMenuKeyboard()).reply_markup }
+  );
 });
 
 // =======================================================================
@@ -1002,17 +1066,13 @@ async function refreshOrderStatuses(orders) {
   }
 }
 
-bot.action(/^cancel_order_([0-9a-fA-F]{24})$/, async (ctx) => {
-  await ctx.answerCbQuery();
-  const order = await Order.findById(ctx.match[1]);
-  if (!order || order.userId !== String(ctx.from.id)) return ctx.reply('❌ Order မတွေ့ပါ။');
+// submits the cancel request to the provider; the refund itself is paid later,
+// only once the provider's status API confirms "Canceled" (see refreshOrderStatuses)
+async function requestCancel(ctx, order) {
   if (!['pending', 'in progress', 'processing'].includes(String(order.status).toLowerCase())) {
     return ctx.reply('ℹ️ ဒီ order ကို cancel လုပ်၍ မရတော့ပါ။');
   }
   try {
-    // this only SUBMITS the cancel request - it does NOT refund anything.
-    // Cashback happens later (within a few minutes) once /status confirms
-    // the provider actually cancelled it - see refreshOrderStatuses above.
     const submitted = await providers.cancelOrder(order.provider, order.providerOrderId);
     if (submitted) {
       await ctx.reply('🕐 Cancel request တင်ပြီးပါပြီရှင့်။ cancel တာအောင်မြင်တာနဲ့ cashback ပြန်ပေးပါမည် (မိနစ်အနည်းငယ် စောင့်ပေးပါနော်) ❤️');
@@ -1023,6 +1083,121 @@ bot.action(/^cancel_order_([0-9a-fA-F]{24})$/, async (ctx) => {
     logFailure('customer order cancellation failed', err);
     await ctx.reply(customerError('Cancel တောင်းဆိုမှုကို ဆောင်ရွက်နေစဉ် အခက်အခဲ ဖြစ်နေပါသည်။ ခဏနေပြီး ပြန်ကြိုးစားပေးပါရှင့်။'));
   }
+}
+
+bot.action(/^cancel_order_([0-9a-fA-F]{24})$/, async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const order = await Order.findById(ctx.match[1]);
+  if (!order || order.userId !== String(ctx.from.id)) return ctx.reply('❌ Order မတွေ့ပါ။');
+  await requestCancel(ctx, order);
+});
+
+// =======================================================================
+// 🆘 Help Order: the customer gives an Order ID and picks one of
+//   ♻️ refill (dropped after completion) / ⚡ speed up / ❌ cancel + refund.
+// Refill and cancel go to the provider API automatically when possible;
+// anything the API cannot do becomes a request the admin follows up in the
+// panel (Help page) - speed-up has no API in standard SMM panels.
+// =======================================================================
+const HELP_LABEL = { refill: '♻️ Refill (ပြန်ဖြည့်)', speed: '⚡ Speed up (မြန်ပေး)', cancel: '❌ Cancel + Refund' };
+
+bot.hears(BTN_HELP, async (ctx) => {
+  resetState(ctx.from.id);
+  if (!helpOn()) return ctx.reply(texts.t('help_disabled'));
+  st(ctx.from.id).level = 'help_id';
+  const recent = await Order.find({ userId: String(ctx.from.id) }).sort({ createdAt: -1 }).limit(5);
+  const rows = recent.map(o => [Markup.button.callback(`${statusIcon(o.status)} #${orderRef(o)} · ${shorten(`${o.categoryLabel || ''} ${o.serviceLabel || ''}`.trim(), 28)}`, `help_o_${o._id}`)]);
+  await ctx.reply(texts.t('help_ask_id'), rows.length ? Markup.inlineKeyboard(rows) : undefined);
+});
+
+async function showHelpCard(ctx, order) {
+  const text =
+    `🆘 <b>Order</b> <code>${orderRef(order)}</code>\n` +
+    `📦 ${esc(`${order.categoryLabel || ''} ${order.serviceLabel || ''}`.trim())}\n` +
+    `🔢 ${nf(order.quantity)}  ·  🔗 ${esc(shorten(order.link, 60))}\n` +
+    `📊 Status: <b>${esc(order.status)}</b>\n\n${esc(texts.t('help_choose'))}`;
+  await ctx.reply(text, {
+    parse_mode: 'HTML', disable_web_page_preview: true,
+    reply_markup: Markup.inlineKeyboard([
+      [Markup.button.callback('ပြန်ကျသွားလို့ ပြန်ဖြည့်ပေးပါ', `help_a_${order._id}_refill`)],
+      [Markup.button.callback('နှေးနေလို့ မြန်ပေးပါ', `help_a_${order._id}_speed`)],
+      [Markup.button.callback('ပယ်ဖျက်ပြီး ငွေပြန်ပေးပါ', `help_a_${order._id}_cancel`)]
+    ]).reply_markup
+  });
+}
+
+bot.action(/^help_o_([0-9a-fA-F]{24})$/, async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  if (!helpOn()) return ctx.reply(texts.t('help_disabled'));
+  const order = await Order.findById(ctx.match[1]);
+  if (!order || order.userId !== String(ctx.from.id)) return ctx.reply(texts.t('help_not_found'));
+  resetState(ctx.from.id);
+  await showHelpCard(ctx, order);
+});
+
+async function notifyAdminsHelp(hr, order, user) {
+  const text =
+    `🆘 <b>Help Request — ${hr.type === 'refill' ? 'Refill' : hr.type === 'speed' ? 'Speed up' : 'Cancel'}</b>${hr.auto ? '  (API ဖြင့် ပို့ပြီး)' : ''}\n` +
+    `👤 ${esc(sanitizeName(user.firstName || user.username || user._id))} (<code>${user._id}</code>)\n` +
+    `🆔 Order <code>${orderRef(order)}</code>  ·  ${esc(order.provider)} <code>${esc(order.providerOrderId)}</code>\n` +
+    `📦 ${esc(`${order.categoryLabel || ''} ${order.serviceLabel || ''}`.trim())}\n` +
+    `🔢 ${nf(order.quantity)}  ·  📊 ${esc(order.status)}\n🔗 ${esc(shorten(order.link, 80))}\n` +
+    (hr.result ? `\n📝 ${esc(hr.result)}` : '');
+  for (const id of ADMIN_IDS) {
+    await bot.telegram.sendMessage(id, text, {
+      parse_mode: 'HTML', disable_web_page_preview: true,
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('✅ ဆောင်ရွက်ပြီး', `help_done_${hr._id}`)]]).reply_markup
+    }).catch(err => console.error('notify admin (help) failed', err.message));
+  }
+}
+
+bot.action(/^help_a_([0-9a-fA-F]{24})_(refill|speed|cancel)$/, async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  if (!helpOn()) return ctx.reply(texts.t('help_disabled'));
+  const type = ctx.match[2];
+  const order = await Order.findById(ctx.match[1]);
+  if (!order || order.userId !== String(ctx.from.id)) return ctx.reply(texts.t('help_not_found'));
+  const status = String(order.status).toLowerCase();
+  const done = status === 'completed';
+  const cancelled = ['canceled', 'cancelled'].includes(status) || order.refunded;
+
+  if (type === 'cancel') return requestCancel(ctx, order);
+  if (cancelled) return ctx.reply(texts.t('help_cancelled'));
+  if (type === 'speed' && (done || status === 'partial')) return ctx.reply(texts.t('help_speed_done'));
+  if (type === 'refill' && !done) return ctx.reply(texts.t('help_refill_not_done'));
+
+  // same request for the same order only once per 24h (stops button spamming)
+  const since = new Date(Date.now() - 24 * 3600 * 1000);
+  if (await HelpRequest.findOne({ orderId: String(order._id), type, createdAt: { $gte: since } })) return ctx.reply(texts.t('help_cooldown'));
+
+  let auto = false, result = '';
+  if (type === 'refill') {
+    try {
+      const id = await providers.refillOrder(order.provider, order.providerOrderId);
+      auto = true; result = `provider refill #${id} ပို့ပြီး`;
+    } catch (err) {
+      logFailure('customer refill request failed', err);
+      result = 'API refill မရ - manual ဆောင်ရွက်ရန်';
+    }
+  } else { result = 'Speed-up: provider support ထံ manual တောင်းဆိုရန်'; }
+
+  const hr = await HelpRequest.create({
+    orderId: String(order._id), orderNo: order.orderNo, userId: order.userId, type, auto, result,
+    provider: order.provider, providerOrderId: order.providerOrderId
+  });
+  await ctx.reply(auto ? texts.t('help_refill_ok') : texts.t('help_manual'), await mainMenuKeyboard());
+  const user = await User.findById(order.userId);
+  await notifyAdminsHelp(hr, order, user || { _id: order.userId });
+});
+
+bot.action(/^help_done_([0-9a-fA-F]{24})$/, async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Admin only', { show_alert: true });
+  await ctx.answerCbQuery().catch(() => {});
+  const hr = await HelpRequest.findOneAndUpdate({ _id: ctx.match[1], status: 'open' }, { status: 'done', doneAt: new Date() }, { new: true });
+  if (!hr) return ctx.reply('ℹ️ ဒီတောင်းဆိုမှုကို ကိုင်တွယ်ပြီးသားပါ (သို့) မတွေ့ပါ။');
+  await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+  await safeSend(hr.userId, texts.t('help_done', { orderNo: hr.orderNo || '' }));
+  await ctx.reply(`✅ Help request ပြီးပါပြီ (User ကို အကြောင်းကြားပြီး)။`);
 });
 
 // background job: periodically refresh all still-active orders so users get
@@ -1596,7 +1771,7 @@ if (SELF_URL) {
 // ---------------------------------------------------------------------
 panel = mountAdminPanel(app, {
   bot, adminIds: ADMIN_IDS, isAdmin, safeSend, startBroadcast, sanitizeName, toBoldUnicode,
-  approveDeposit, rejectDeposit, refundOrder, refundIfPartial, refreshOrderStatuses, priceFor
+  approveDeposit, rejectDeposit, refundOrder, refundIfPartial, refreshOrderStatuses, priceFor, orderRef
 });
 
 // Warn the admins in Telegram when a provider account runs low, so orders
@@ -1626,6 +1801,9 @@ setInterval(() => { lowBalanceSweep(); }, 30 * 60 * 1000);
 mongoose.connect(MONGODB_URI).then(async () => {
   console.log('MongoDB connected');
   await texts.preload();
+  migrateOrderNos().catch(err => console.error('order number migration failed:', err.message));
+  retention.autoCleanup();
+  setInterval(() => { retention.autoCleanup(); }, 6 * 3600 * 1000);
   app.listen(PORT, () => console.log(`Health-check server listening on port ${PORT}`));
   bot.launch()
     .then(() => console.log('Bot launched (long polling).'))

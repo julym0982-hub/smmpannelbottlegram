@@ -120,3 +120,9 @@ Facebook အတွက် category/service တွေကို ခုနောက�
 1. Render env ထဲမှာ `PANEL_URL=https://your-app.onrender.com` ထည့်ပါ (RENDER_EXTERNAL_URL ရှိရင် မလိုပါ)။
 2. Bot ထဲမှာ Admin က `/adminlogin` ပို့ → "Admin Panel ဝင်ရန်" button ပြန်လာမည်။ Admin မဟုတ်ရင် ဘာမှ မပြန်ပါ။ Link က ၅ မိနစ်၊ တစ်ကြိမ်သာ၊ session ၁၂ နာရီ။
 3. Panel: Dashboard (ရောင်းရငွေ/အမြတ်/provider လက်ကျန်)၊ ငွေဖြည့် Accept/Edit/Reject (Telegram button နဲ့ panel နှစ်နေရာလုံးက တူညီပြီး ငွေ နှစ်ခါ မဝင်ပါ)၊ Orders (status/refund)၊ Users (ငွေထည့်/နှုတ်၊ ban၊ discount %၊ စာပို့)၊ Services (shweboost/hiroshi/secsers ကနေ ရှာပြီး tick နှိပ်ပြီး ထည့်)၊ Coupon၊ Broadcast၊ Settings (ဈေး/KPay/စာသား/menu)၊ Activity log။
+
+## 🆘 Order အကူအညီ (Help Order)
+- User တွေ Order တင်ရင် **Order ID** (ဥပမာ `10023`) ပြန်ပြပေးမည် - နှိပ်ရင် copy ကူးလို့ရ။ Provider ရဲ့ ID ကိုတော့ user မမြင်ရပါ။
+- Main menu မှာ "🆘 Order အကူအညီ" → Order ID ထည့် (သို့) နောက်ဆုံး order ကနေ ရွေး → ပြန်ဖြည့် / မြန်ပေး / ပယ်ဖျက်ပြီး ငွေပြန်ပေး။ Refill နဲ့ Cancel ကို provider API ကို အလိုအလျောက်ခေါ်၊ API နဲ့ မရတာ (speed up စသည်) ကို Admin ဆီ Telegram + Panel "Help Orders" page ကို ပို့။
+- Panel > Settings > **Help & Data** မှာ Help ကို ဖွင့်/ပိတ် (ပိတ်ရင် user တွေ ခလုတ် မမြင်ရ)။
+- **History ရှင်းလင်းခြင်း**: ပြီးဆုံးပြီးသား order ကို N ရက်ကျော်ရင် နေ့စဉ် အလိုအလျောက်ရှင်း (default 5 ရက်)၊ user တစ်ယောက်စီရဲ့ နောက်ဆုံး N ခု (default 6) အမြဲချန်၊ active order မထိ။ ရက်/အရေအတွက်ကို panel ကနေ ပြင်လို့ရ၊ "ကြိုကြည့်" နဲ့ "ယခုရှင်းမည်" ပါ။ Dashboard ရောင်းရငွေစာရင်းကတော့ ဆက်မှတ်ထားမည်။

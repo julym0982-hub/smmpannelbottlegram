@@ -189,10 +189,19 @@ async function cancelOrder(provider, providerOrderId) {
   return false;
 }
 
+// ask the provider to refill an order (Perfect Panel "refill" action).
+// Returns the provider's refill id; throws when the provider refuses
+// (service has no refill, still within its refill window, ...).
+async function refillOrder(provider, providerOrderId) {
+  const res = await call(provider, { action: 'refill', order: String(providerOrderId) });
+  if (res && (res.refill || res.refill === 0) && !res.error) return res.refill;
+  throw new Error((res && res.error) ? String(res.error) : 'refill refused');
+}
+
 async function getBalance(provider) {
   return call(provider, { action: 'balance' });
 }
 
 module.exports = {
-  CONFIG, listServices, fetchServiceInfo, calcSaleCost, calcBaseCost, placeOrder, orderStatus, orderStatusBulk, cancelOrder, getBalance, formatDuration
+  CONFIG, listServices, fetchServiceInfo, calcSaleCost, calcBaseCost, placeOrder, orderStatus, orderStatusBulk, cancelOrder, refillOrder, getBalance, formatDuration
 };
