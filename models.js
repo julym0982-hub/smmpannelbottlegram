@@ -7,6 +7,8 @@ const UserSchema = new mongoose.Schema({
   balance: { type: Number, default: 0 },
   totalSpent: { type: Number, default: 0 },
   banned: { type: Boolean, default: false },
+  blockedBot: { type: Boolean, default: false }, // the customer blocked / deleted the bot -> we stop messaging them until they write again
+  blockedAt: Date,
   discount: { type: Number, default: 0, min: 0, max: 100 }, // personal reseller discount in % (set from the admin panel)
   note: String, // private admin note, never shown to the user
   createdAt: { type: Date, default: Date.now }

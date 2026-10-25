@@ -33,8 +33,10 @@ const bot = new Telegraf(BOT_TOKEN);
 // ---------------------------------------------------------------------
 let panel = null; // set once the web admin panel is mounted (see bottom of file)
 const state = {};
-function st(id) { if (!state[id]) state[id] = { level: 'root' }; return state[id]; }
-function resetState(id) { state[id] = { level: 'root' }; }
+function st(id) { if (!state[id]) state[id] = { level: 'root' }; state[id].at = Date.now(); return state[id]; }
+// forget people who have been idle for 6 hours (keeps RAM flat; they simply start from the main menu again)
+setInterval(() => { const cut = Date.now() - 6 * 3600 * 1000; for (const k of Object.keys(state)) if ((state[k].at || 0) < cut) delete state[k]; }, 30 * 60 * 1000).unref();
+function resetState(id) { state[id] = { level: 'root', at: Date.now() }; }
 
 function isAdmin(id) { return ADMIN_IDS.includes(String(id)); }
 
@@ -160,29 +162,53 @@ function topupMethodKeyboard() {
   ]);
 }
 
-async function safeSend(chatId, text, extra) {
-  try { await bot.telegram.sendMessage(chatId, text, extra); return true; }
-  catch (err) {
-    const desc = err && err.response && err.response.description;
-    if (desc && /blocked|chat not found|deactivated/i.test(desc)) return false;
-    console.error('safeSend error:', desc || err.message);
-    return false;
+// Sends one message and NEVER throws. Returns 'ok' | 'blocked' | 'error'.
+//  - 403 (bot blocked / user deleted the chat / account deactivated) -> the user is remembered as blockedBot
+//  - 429 (Telegram flood control) -> waits the time Telegram asks for, then retries
+async function trySend(chatId, text, extra) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { await bot.telegram.sendMessage(chatId, text, extra); return 'ok'; }
+    catch (err) {
+      const r = (err && err.response) || {};
+      const desc = String(r.description || err.message || '');
+      if (r.error_code === 403 || /blocked by the user|chat not found|user is deactivated|bot was kicked|have no rights/i.test(desc)) {
+        try { await User.findByIdAndUpdate(String(chatId), { $set: { blockedBot: true, blockedAt: new Date() } }); } catch (_) { /* marking is best-effort */ }
+        return 'blocked';
+      }
+      if (r.error_code === 429 && attempt < 2) {
+        const wait = Math.min(((r.parameters && r.parameters.retry_after) || 3) + 1, 30);
+        await delay(wait * 1000);
+        continue;
+      }
+      console.error('send failed:', desc.slice(0, 200));
+      return 'error';
+    }
   }
+  return 'error';
 }
+async function safeSend(chatId, text, extra) { return (await trySend(chatId, text, extra)) === 'ok'; }
 
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 // Run broadcasts outside the Telegram update handler so mass messaging does
 // not delay replies to other users. The delay helps avoid rate-limit bursts.
-function startBroadcast(adminId, recipients, text) {
+function startBroadcast(adminId, recipients, text, skippedBlocked = 0) {
   setImmediate(async () => {
-    let sent = 0;
-    for (const recipientId of recipients) {
-      if (await safeSend(recipientId, text)) sent++;
-      await delay(75);
-    }
-    await safeSend(adminId, `✅ Broadcast ပြီးပါပြီ။ User ${sent}/${recipients.length} ဆီ ပို့နိုင်ပါတယ်။`);
+    const n = { ok: 0, blocked: 0, error: 0 };
+    try {
+      for (const recipientId of recipients) {
+        n[await trySend(recipientId, text)]++;
+        await delay(75);
+      }
+    } catch (err) { console.error('broadcast crashed:', err && err.message); }
+    await safeSend(adminId, `✅ Broadcast ပြီးပါပြီ။\nပို့နိုင်သူ: ${n.ok}/${recipients.length}\nBot ကို block/ဖျက်ထားသူ: ${n.blocked}${skippedBlocked ? ` (+ အရင်ကတည်းက block ထားလို့ ကျော်ထားသူ ${skippedBlocked})` : ''}\nအခြား error: ${n.error}`);
   });
+}
+// everyone who can still be reached (people who blocked the bot are skipped; they come back automatically when they write again)
+async function broadcastAudience(extra = {}) {
+  const all = await User.find(extra).select('_id blockedBot').lean();
+  const ids = all.filter(u => !u.blockedBot).map(u => String(u._id));
+  return { ids, skipped: all.length - ids.length };
 }
 
 async function getOrCreateUser(from) {
@@ -195,6 +221,7 @@ async function getOrCreateUser(from) {
     let changed = false;
     if (from.username && u.username !== safeUsername) { u.username = safeUsername; changed = true; }
     if (from.first_name && u.firstName !== safeFirstName) { u.firstName = safeFirstName; changed = true; }
+    if (u.blockedBot) { u.blockedBot = false; changed = true; } // they wrote to us, so they are reachable again
     if (changed) await u.save();
   }
   return u;
@@ -688,9 +715,9 @@ bot.on('text', async (ctx, next) => {
   if (s.level === 'admin_send_all' && isAdmin(ctx.from.id)) {
     const adminId = String(ctx.from.id);
     resetState(ctx.from.id);
-    const users = await User.find({}).select('_id').lean();
-    startBroadcast(adminId, users.map(u => String(u._id)), text);
-    return ctx.reply(`✅ User ${users.length} ယောက်ဆီ စာပို့ခြင်းကို စတင်လိုက်ပါပြီ။ Bot ကို ဆက်သုံးနိုင်ပါတယ်။`);
+    const aud = await broadcastAudience();
+    startBroadcast(adminId, aud.ids, text, aud.skipped);
+    return ctx.reply(`✅ User ${aud.ids.length} ယောက်ဆီ စာပို့ခြင်းကို စတင်လိုက်ပါပြီ။ Bot ကို ဆက်သုံးနိုင်ပါတယ်။`);
   }
 
   // ---- admin: /addid wizard ----
@@ -1187,10 +1214,10 @@ async function notifyAdminsHelp(hr, order, user) {
     `🔢 ${nf(order.quantity)}  ·  📊 ${esc(order.status)}\n🔗 ${esc(shorten(order.link, 80))}\n` +
     (hr.result ? `\n📝 ${esc(hr.result)}` : '');
   for (const id of ADMIN_IDS) {
-    await bot.telegram.sendMessage(id, text, {
+    await trySend(id, text, {
       parse_mode: 'HTML', disable_web_page_preview: true,
       reply_markup: Markup.inlineKeyboard([[Markup.button.callback('✅ ဆောင်ရွက်ပြီး', `help_done_${hr._id}`)]]).reply_markup
-    }).catch(err => console.error('notify admin (help) failed', err.message));
+    });
   }
 }
 
@@ -1722,9 +1749,9 @@ bot.command('allsendmessage', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const rest = ctx.message.text.split(' ').slice(1).join(' ');
   if (rest) {
-    const users = await User.find({}).select('_id').lean();
-    startBroadcast(String(ctx.from.id), users.map(u => String(u._id)), rest);
-    return ctx.reply(`✅ User ${users.length} ယောက်ဆီ စာပို့ခြင်းကို စတင်လိုက်ပါပြီ။ Bot ကို ဆက်သုံးနိုင်ပါတယ်။`);
+    const aud = await broadcastAudience();
+    startBroadcast(String(ctx.from.id), aud.ids, rest, aud.skipped);
+    return ctx.reply(`✅ User ${aud.ids.length} ယောက်ဆီ စာပို့ခြင်းကို စတင်လိုက်ပါပြီ။ Bot ကို ဆက်သုံးနိုင်ပါတယ်။`);
   }
   st(ctx.from.id).level = 'admin_send_all';
   await ctx.reply('User အားလုံးသို့ ပို့လိုသော message ကို ရိုက်ထည့်ပါ');
@@ -1843,6 +1870,15 @@ bot.command('edittext', async (ctx) => {
 // =======================================================================
 // error handling, health server, launch
 // =======================================================================
+// Telegram tells us when someone blocks / unblocks the bot (private chats)
+bot.on('my_chat_member', async (ctx) => {
+  try {
+    const u = ctx.myChatMember; if (!u || !u.chat || u.chat.type !== 'private') return;
+    const gone = ['kicked', 'left'].includes(u.new_chat_member && u.new_chat_member.status);
+    await User.findByIdAndUpdate(String(u.chat.id), gone ? { $set: { blockedBot: true, blockedAt: new Date() } } : { $set: { blockedBot: false } });
+  } catch (err) { console.error('my_chat_member:', err.message); }
+});
+
 bot.catch((err, ctx) => console.error(`Bot error for update ${ctx.updateType}:`, err));
 
 // Belt-and-braces: never let one unexpected synchronous throw kill the
@@ -1882,7 +1918,7 @@ if (SELF_URL) {
 // Web admin panel (Express) - see admin.js. Login links come from /adminlogin.
 // ---------------------------------------------------------------------
 panel = mountAdminPanel(app, {
-  bot, adminIds: ADMIN_IDS, isAdmin, safeSend, startBroadcast, sanitizeName, toBoldUnicode,
+  bot, adminIds: ADMIN_IDS, isAdmin, safeSend, startBroadcast, broadcastAudience, sanitizeName, toBoldUnicode,
   approveDeposit, rejectDeposit, refundOrder, refundIfPartial, refreshOrderStatuses, priceFor, orderRef
 });
 

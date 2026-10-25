@@ -151,3 +151,9 @@ Panel → More → **AI Bot**. Menu ခလုတ်မဟုတ်တဲ့ စ�
 3. **ဝင်ပေါက် လျှို့ဝှက်**: `PANEL_PATH=/panel-x7k9p2-secure` လို့ ထားရင် `/admin` က 404 ဖြစ်သွားမယ်။
 4. **Cookie**: HttpOnly + SameSite=Strict + Secure (https) + panel path တစ်ခုတည်း၊ ၁၂ နာရီပြည့်ရင် ထွက်၊ HSTS/no-store/noindex headers။ ဝင်ထားသမျှ session အကုန်ထုတ်ချင်ရင် `PANEL_SESSION_SECRET` ပြောင်းပြီး redeploy။
 5. `/adminlogin` Telegram link login ကို password+2FA ထက် အားနည်းတယ်လို့ ထင်ရင် `PANEL_LINK_LOGIN=off`။
+
+## v12 – Login 2-step + blocked users
+- Login: Username + Password ကိုပဲ အရင်ပြ → မှန်ရင် (2FA ဖွင့်ထားရင်) ၆ လုံးကုဒ် ကွက်တစ်ခုတည်း ပြ။ Step 1 အောင်ကြောင်း ticket က ၅ မိနစ်၊ IP တစ်ခုတည်း၊ session အဖြစ် မသုံးနိုင်။
+- Bot ကို block/chat ဖျက်ထားတဲ့ user ဆီ စာပို့ရင် error မတက်/မပျက်: `blockedBot` လို့ မှတ် → နောက် broadcast တွေ ကျော် → အဲဒီ user ပြန်စာပို့ရင် (သို့) Telegram `my_chat_member` update ရရင် အလိုအလျောက် ပြန်ဖွင့်။ Telegram 429 (flood) ကို စောင့်ပြီး ပြန်ပို့။ Broadcast ပြီးရင် "ပို့နိုင်/block/error" ခွဲ report။
+- Panel → More → "စာပို့ရန်": User အားလုံးဆီ + User ID ထည့်ပြီး တစ်ယောက်ချင်း ပို့ရန် ၂ ခုလုံး ရှိ။ Bot ထဲမှာလည်း `/allsendmessage` နဲ့ `/sendmessage <id>`။
+- RAM: idle ၆ နာရီကျော် user state တွေကို အလိုအလျောက် ရှင်း။

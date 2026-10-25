@@ -107,6 +107,17 @@ function makeSession(adminId, via) {
   const body = b64(JSON.stringify({ id: String(adminId), via: via || 'link', exp: Date.now() + SESSION_TTL }));
   return `${body}.${sign(body)}`;
 }
+// short-lived proof that username+password were right (step 1 of 2FA login); signed with a different label so it can never act as a session
+function makeTicket(ip) {
+  const body = b64(JSON.stringify({ t: '2fa', ip, exp: Date.now() + 5 * 60 * 1000, n: crypto.randomBytes(6).toString('hex') }));
+  return `${body}.${sign('2fa:' + body)}`;
+}
+function readTicket(value, ip) {
+  if (!value || typeof value !== 'string' || !value.includes('.')) return null;
+  const [body, sig] = value.split('.');
+  if (!safeEqual(sig, sign('2fa:' + body))) return null;
+  try { const d = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); return d && d.t === '2fa' && d.ip === ip && d.exp > Date.now() ? d : null; } catch (_) { return null; }
+}
 function readSession(value) {
   if (!value || typeof value !== 'string' || !value.includes('.')) return null;
   const [body, sig] = value.split('.');
@@ -249,33 +260,50 @@ module.exports = function mountAdminPanel(app, deps) {
       res.json({ ok: true });
     };
 
-    // ---- username + password ----
-    if (typeof req.body.username === 'string' || typeof req.body.password === 'string') {
+    // ---- username + password (+ 2FA as a second step) ----
+    if (typeof req.body.username === 'string' || typeof req.body.password === 'string' || typeof req.body.ticket === 'string') {
       if (!PASSWORD_LOGIN) throw fail(403, 'Password login မဖွင့်ထားပါ (PANEL_USERNAME / PANEL_PASSWORD ၁၀ လုံးအထက် သတ်မှတ်ပါ)။');
       // many different IPs guessing at once: every failure anywhere makes ALL password attempts slower (owner still has the Telegram link)
       globalFails = globalFails.filter(t => t > Date.now() - LOCK_MS);
       if (globalFails.length >= 40) await new Promise(r => setTimeout(r, 6000));
       const f = failedLogins.get(ip) || { n: 0, until: 0 };
       if (f.until > Date.now()) throw fail(429, 'မှားများလွန်းလို့ ၁၅ မိနစ် ပိတ်ထားပါတယ်။ နောက်မှ ပြန်စမ်းပါ။');
-      const u = String(req.body.username || '').slice(0, 200), pw = String(req.body.password || '').slice(0, 200);
-      // both compared in constant time, always both evaluated
-      const okU = crypto.timingSafeEqual(sha(u.trim().toLowerCase()), sha(PANEL_USER.toLowerCase())); // case-insensitive: phone keyboards capitalise the first letter
-      const okP = crypto.timingSafeEqual(sha(pw), sha(PANEL_PASS));
-      const okC = TOTP_ON ? totpCheck(req.body.code) : true; // 2FA code is always checked too, so the error never says which part was wrong
-      if (!(okU && okP && okC)) {
+      const failNow = async (why, message) => {
         if (failedLogins.size > 5000) failedLogins.clear();
         f.n += 1; globalFails.push(Date.now());
         if (f.n >= LOCK_AFTER) { f.until = Date.now() + LOCK_MS; f.n = 0; }
         failedLogins.set(ip, f);
         await new Promise(r => setTimeout(r, 800)); // slow guessing down
-        console.error(`panel login failed (ip ${ip}): username ${okU ? 'ok' : 'WRONG'}, password ${okP ? 'ok' : 'WRONG'}${TOTP_ON ? ', 2FA code ' + (okC ? 'ok' : 'WRONG') : ''}`);
+        console.error(`panel login failed (ip ${ip}): ${why}`);
         await AdminLog.create({ admin: 'unknown', action: 'login_failed', detail: `ip ${ip}` }).catch(() => {});
         if (f.until > Date.now()) for (const id of (deps.adminIds || [])) safeSend(id, `⚠️ Admin Panel login မှားနေပါတယ် (ip ${ip}) - ၁၅ မိနစ် ပိတ်လိုက်ပါပြီ။ မိမိမဟုတ်ရင် PANEL_PASSWORD ပြောင်းပါ။`);
-        throw fail(401, TOTP_ON ? 'Username / Password / 2FA code တစ်ခုခု မှားနေပါသည်။' : 'Username သို့မဟုတ် Password မှားနေပါသည်။');
-      }
-      failedLogins.delete(ip);
+        throw fail(401, message);
+      };
       const adminId = (deps.adminIds || [])[0];
       if (!adminId) throw fail(500, 'ADMIN_IDS မသတ်မှတ်ရသေးပါ။');
+
+      if (typeof req.body.ticket === 'string') {
+        // step 2: only the 6-digit code, tied to a ticket that step 1 handed out (5 minutes, this IP only)
+        if (!TOTP_ON) throw fail(403, '2FA မဖွင့်ထားပါ။');
+        if (!readTicket(req.body.ticket, ip)) throw fail(401, 'အချိန်ကုန်သွားပါပြီ၊ Username/Password ကို ပြန်စပါ။');
+        if (!totpCheck(req.body.code)) await failNow('2FA code WRONG (step 2)', 'Code မှားနေပါသည်။');
+        failedLogins.delete(ip);
+        return giveSession(adminId, 'password');
+      }
+
+      const u = String(req.body.username || '').slice(0, 200), pw = String(req.body.password || '').slice(0, 200);
+      // both compared in constant time, always both evaluated
+      const okU = crypto.timingSafeEqual(sha(u.trim().toLowerCase()), sha(PANEL_USER.toLowerCase())); // case-insensitive: phone keyboards capitalise the first letter
+      const okP = crypto.timingSafeEqual(sha(pw), sha(PANEL_PASS));
+      if (!(okU && okP)) await failNow(`username ${okU ? 'ok' : 'WRONG'}, password ${okP ? 'ok' : 'WRONG'}`, 'Username သို့မဟုတ် Password မှားနေပါသည်။');
+      if (TOTP_ON) {
+        if (typeof req.body.code === 'string' && req.body.code) { // one-shot form (all three at once) still works
+          if (!totpCheck(req.body.code)) await failNow('2FA code WRONG', 'Username / Password / 2FA code တစ်ခုခု မှားနေပါသည်။');
+        } else {
+          return res.json({ ok: true, step: '2fa', ticket: makeTicket(ip) });
+        }
+      }
+      failedLogins.delete(ip);
       return giveSession(adminId, 'password');
     }
 
@@ -505,7 +533,7 @@ module.exports = function mountAdminPanel(app, deps) {
       total, page, pages: Math.max(1, Math.ceil(total / PAGE)),
       items: rows.map(u => ({
         id: String(u._id), name: sanitizeName(u.firstName || u.username || u._id), username: u.username || '',
-        balance: u.balance || 0, totalSpent: u.totalSpent || 0, banned: !!u.banned, discount: u.discount || 0, createdAt: u.createdAt
+        balance: u.balance || 0, totalSpent: u.totalSpent || 0, banned: !!u.banned, blockedBot: !!u.blockedBot, discount: u.discount || 0, createdAt: u.createdAt
       }))
     });
   }));
@@ -519,7 +547,7 @@ module.exports = function mountAdminPanel(app, deps) {
       Order.countDocuments({ userId: u._id })
     ]);
     res.json({
-      user: { id: String(u._id), name: sanitizeName(u.firstName || u.username || u._id), username: u.username || '', balance: u.balance || 0, totalSpent: u.totalSpent || 0, banned: !!u.banned, discount: u.discount || 0, note: u.note || '', createdAt: u.createdAt },
+      user: { id: String(u._id), name: sanitizeName(u.firstName || u.username || u._id), username: u.username || '', balance: u.balance || 0, totalSpent: u.totalSpent || 0, banned: !!u.banned, blockedBot: !!u.blockedBot, discount: u.discount || 0, note: u.note || '', createdAt: u.createdAt },
       orderCount,
       orders: orders.map(o => ({ id: String(o._id), label: `${o.categoryLabel || ''} ${o.serviceLabel || ''}`.trim(), quantity: o.quantity, cost: o.cost, status: o.status, createdAt: o.createdAt })),
       deposits: deposits.map(d => ({ id: String(d._id), amount: d.amount, method: d.method, status: d.status, createdAt: d.createdAt }))
@@ -571,16 +599,16 @@ module.exports = function mountAdminPanel(app, deps) {
     if (!(await User.exists({ _id: String(req.params.id) }))) throw fail(404, 'User မတွေ့ပါ');
     const ok = await safeSend(String(req.params.id), text);
     log(req, 'message_user', `${req.params.id} (${ok ? 'sent' : 'failed'})`);
-    if (!ok) throw fail(502, 'ပို့မရပါ (User က bot ကို block ထားနိုင်သည်)');
+    if (!ok) throw fail(502, 'ပို့မရပါ - User က bot ကို block/ဖျက်ထားနိုင်ပါတယ်');
     res.json({ ok: true });
   }));
 
   api.post('/broadcast', wrap(async (req, res) => {
     const text = str(req.body.text, 'Message', { max: 3500 });
-    const users = await User.find(req.body.skipBanned ? { banned: { $ne: true } } : {}).select('_id').lean();
-    startBroadcast(req.adminId, users.map(u => String(u._id)), text);
-    log(req, 'broadcast', `${users.length} users: ${text.slice(0, 80)}`);
-    res.json({ ok: true, recipients: users.length });
+    const aud = await deps.broadcastAudience(req.body.skipBanned ? { banned: { $ne: true } } : {});
+    startBroadcast(req.adminId, aud.ids, text, aud.skipped);
+    log(req, 'broadcast', `${aud.ids.length} users (+${aud.skipped} blocked skipped): ${text.slice(0, 80)}`);
+    res.json({ ok: true, recipients: aud.ids.length, skipped: aud.skipped });
   }));
 
   // ======================================================================
