@@ -139,3 +139,8 @@ Panel → More → **AI Bot**. Menu ခလုတ်မဟုတ်တဲ့ စ�
 - System prompt / ဆိုင်အချက်အလက် / limit စာ / fallback စာ ကို panel ကနေ ပြင်နိုင်။
 - **Gemini model ID** ကို Panel မှာ အတိအကျ ထည့်ပါ (default `gemini-flash-latest`)။
 - Render env: `AI_KEY_SECRET` (ရွေးချယ်) — မထည့်ရင် BOT_TOKEN ကို သုံးပါတယ်။ ပြောင်းလိုက်ရင် key တွေ ပြန်ထည့်ရမယ်။
+
+## Panel login & AI safety (v10)
+- **Username/Password login**: Render env `PANEL_USERNAME`, `PANEL_PASSWORD` (၁၀ လုံးအထက်), `PANEL_SESSION_SECRET` (long random). ၅ ကြိမ်မှားရင် IP အလိုက် ၁၅ မိနစ်ပိတ် + Admin ကို Telegram သတိပေး၊ IP အများကြီးကနေ guess ရင် အားလုံးကို နှေးစေ။ `PANEL_LINK_LOGIN=off` ထားရင် Telegram link login ပိတ်ပြီး password တစ်ခုတည်း။
+- **AI လုံခြုံရေး**: AI မှာ tool/DB/panel access လုံးဝမရှိ (စာပဲ ဖြေနိုင်)။ ထပ်ပြီး (1) prompt/panel/key တောင်းတဲ့ စာတွေကို AI မခေါ်ဘဲ တားမည် (2) customer နာမည်ကို prompt ထဲမထည့်ခင် သန့်စင် (3) AI အဖြေထဲ key/token/prompt ပါရင် မပို့ဘဲ အစားထိုး (4) Menu ခလုတ်စာတွေ AI ဆီ မရောက်။ KPay/Wave နံပါတ်၊ အနည်းဆုံးငွေဖြည့်၊ Contact Admin ခလုတ်ကို AI က settings ကနေ အလိုအလျောက် သိ။
+- Panel ထဲမှာ ယခင်သိမ်းထားတဲ့ prompt ရှိရင် အသစ်ယူချင်ရင် AI Bot → System Prompt အောက် "↩️ မူလအတိုင်း" နှိပ်ပါ။

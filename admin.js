@@ -170,6 +170,7 @@ module.exports = function mountAdminPanel(app, deps) {
   });
 
   const failedLogins = new Map(); // ip -> { n, until }
+  let globalFails = [];
   api.get('/login-info', (req, res) => res.json({ password: PASSWORD_LOGIN, link: LINK_LOGIN }));
 
   api.post('/login', wrap(async (req, res) => {
@@ -187,6 +188,9 @@ module.exports = function mountAdminPanel(app, deps) {
     // ---- username + password ----
     if (typeof req.body.username === 'string' || typeof req.body.password === 'string') {
       if (!PASSWORD_LOGIN) throw fail(403, 'Password login မဖွင့်ထားပါ (PANEL_USERNAME / PANEL_PASSWORD ၁၀ လုံးအထက် သတ်မှတ်ပါ)။');
+      // many different IPs guessing at once: every failure anywhere makes ALL password attempts slower (owner still has the Telegram link)
+      globalFails = globalFails.filter(t => t > Date.now() - LOCK_MS);
+      if (globalFails.length >= 40) await new Promise(r => setTimeout(r, 6000));
       const f = failedLogins.get(ip) || { n: 0, until: 0 };
       if (f.until > Date.now()) throw fail(429, 'မှားများလွန်းလို့ ၁၅ မိနစ် ပိတ်ထားပါတယ်။ နောက်မှ ပြန်စမ်းပါ။');
       const u = String(req.body.username || '').slice(0, 200), pw = String(req.body.password || '').slice(0, 200);
@@ -194,7 +198,8 @@ module.exports = function mountAdminPanel(app, deps) {
       const okU = crypto.timingSafeEqual(sha(u), sha(PANEL_USER));
       const okP = crypto.timingSafeEqual(sha(pw), sha(PANEL_PASS));
       if (!(okU && okP)) {
-        f.n += 1;
+        if (failedLogins.size > 5000) failedLogins.clear();
+        f.n += 1; globalFails.push(Date.now());
         if (f.n >= LOCK_AFTER) { f.until = Date.now() + LOCK_MS; f.n = 0; }
         failedLogins.set(ip, f);
         await new Promise(r => setTimeout(r, 800)); // slow guessing down
@@ -1066,7 +1071,7 @@ module.exports = function mountAdminPanel(app, deps) {
   // chat with the assistant exactly as a customer would (current prompt + keys), no daily limit
   api.post('/ai/test', wrap(async (req, res) => {
     const message = str(req.body.message, 'Message', { max: 1000 });
-    const r = await ai.ask({ system: ai.buildSystem({ name: 'Admin စမ်းသပ်သူ', balance: '' }), history: Array.isArray(req.body.history) ? req.body.history.slice(-12).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text || '').slice(0, 1000) })) : [], text: message });
+    const r = await ai.ask({ system: ai.buildSystem({ name: 'Admin စမ်းသပ်သူ', balance: '' }, await ai.autoFacts()), history: Array.isArray(req.body.history) ? req.body.history.slice(-12).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text || '').slice(0, 1000) })) : [], text: message });
     res.json({ ok: r.ok, reply: r.ok ? r.text : '', provider: r.provider || '', error: r.ok ? '' : (r.detail || r.reason) });
   }));
 
