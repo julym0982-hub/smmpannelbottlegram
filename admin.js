@@ -21,12 +21,63 @@ const COOKIE = 'smm_admin';
 // ---- username + password login (set PANEL_USERNAME / PANEL_PASSWORD in the environment) ----
 const PANEL_USER = String(process.env.PANEL_USERNAME || '').trim();
 const PANEL_PASS = String(process.env.PANEL_PASSWORD || '');
-const PASSWORD_LOGIN = !!(PANEL_USER && PANEL_PASS.length >= 10);
+let PASSWORD_LOGIN = !!(PANEL_USER && PANEL_PASS.length >= 10);
 if (PANEL_USER && PANEL_PASS && !PASSWORD_LOGIN) console.error('PANEL_PASSWORD is shorter than 10 characters -> password login DISABLED. Use a longer password.');
 // Telegram one-time link login stays available unless PANEL_LINK_LOGIN=off
 const LINK_LOGIN = !['off', 'false', '0', 'no'].includes(String(process.env.PANEL_LINK_LOGIN || 'on').trim().replace(/^["']|["']$/g, '').toLowerCase());
-console.log(`Admin panel login -> password: ${PASSWORD_LOGIN ? 'ON' : 'OFF'}, telegram link: ${LINK_LOGIN ? 'ON' : 'OFF'}`);
 const sha = (x) => crypto.createHash('sha256').update(String(x)).digest();
+// ---- secret panel address: PANEL_PATH=/admin-x7k9p2-secure-panel (default /admin) ----
+const BASE = (() => {
+  let p = String(process.env.PANEL_PATH || '/admin').trim().replace(/^["']|["']$/g, '');
+  if (!p.startsWith('/')) p = '/' + p;
+  p = p.replace(/\/+$/, '');
+  if (!/^\/[A-Za-z0-9._~-]+(\/[A-Za-z0-9._~-]+)*$/.test(p)) { console.error('PANEL_PATH is not valid (letters, digits, - _ . ~ only) -> using /admin'); return '/admin'; }
+  return p;
+})();
+
+// ---- 2FA: Google Authenticator / Authy style 6-digit codes (RFC 6238), no extra packages ----
+const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+function b32decode(s) {
+  let bits = 0, val = 0; const out = [];
+  for (const c of String(s).replace(/[\s=-]/g, '').toUpperCase()) {
+    const i = B32.indexOf(c); if (i < 0) return null;
+    val = (val << 5) | i; bits += 5;
+    if (bits >= 8) { out.push((val >>> (bits - 8)) & 255); bits -= 8; val &= (1 << bits) - 1; }
+  }
+  return Buffer.from(out);
+}
+function b32encode(buf) {
+  let bits = 0, val = 0, out = '';
+  for (const b of buf) { val = (val << 8) | b; bits += 8; while (bits >= 5) { out += B32[(val >>> (bits - 5)) & 31]; bits -= 5; } val &= (1 << bits) - 1; }
+  if (bits) out += B32[(val << (5 - bits)) & 31];
+  return out;
+}
+function hotp(key, counter) {
+  const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(counter));
+  const h = crypto.createHmac('sha1', key).update(b).digest(); const o = h[19] & 15;
+  return String((((h[o] & 0x7f) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3]) % 1000000).padStart(6, '0');
+}
+const TOTP_RAW = String(process.env.PANEL_TOTP_SECRET || '').trim().replace(/^["']|["']$/g, '');
+const TOTP_KEY = TOTP_RAW ? b32decode(TOTP_RAW) : null;
+const TOTP_BAD = !!TOTP_RAW && (!TOTP_KEY || TOTP_KEY.length < 10);
+if (TOTP_BAD) console.error('PANEL_TOTP_SECRET is not a valid base32 key (use /panel2fa in the bot to make one) -> password login DISABLED until fixed.');
+const TOTP_ON = !!TOTP_RAW && !TOTP_BAD;
+if (TOTP_BAD) PASSWORD_LOGIN = false; // fail closed: never fall back to password-only when 2FA was meant to be on
+console.log(`Admin panel login -> path: ${BASE}, 2FA: ${TOTP_ON ? 'ON' : 'OFF'}, password: ${PASSWORD_LOGIN ? 'ON' : 'OFF'}, telegram link: ${LINK_LOGIN ? 'ON' : 'OFF'}`);
+let lastTotpStep = 0;
+function totpCheck(code) {
+  const c = String(code || '').replace(/\s/g, '');
+  const step = Math.floor(Date.now() / 30000); let ok = false, used = 0;
+  for (const d of [-1, 0, 1]) {   // always evaluates all 3 windows (clock drift tolerance, constant work)
+    const s = step + d;
+    if (crypto.timingSafeEqual(sha(hotp(TOTP_KEY, s)), sha(c)) && s > lastTotpStep) { ok = true; used = Math.max(used, s); }
+  }
+  if (ok) lastTotpStep = used; // a code can only be used once (replay protection)
+  return ok;
+}
+const newTotpSecret = () => b32encode(crypto.randomBytes(20));
+const totpUri = (secret, label) => `otpauth://totp/${encodeURIComponent(label || 'SMM Admin')}?secret=${secret}&issuer=${encodeURIComponent('SMM Admin Panel')}&algorithm=SHA1&digits=6&period=30`;
+
 const LOCK_AFTER = 5, LOCK_MS = 15 * 60 * 1000;
 const SESSION_TTL = 12 * 60 * 60 * 1000;  // 12 hours
 const LOGIN_TTL = 5 * 60 * 1000;          // login link lives 5 minutes, single use
@@ -124,7 +175,7 @@ module.exports = function mountAdminPanel(app, deps) {
     for (const [t, v] of loginTokens) if (v.exp < Date.now() || v.adminId === String(adminId)) loginTokens.delete(t);
     const token = crypto.randomBytes(32).toString('base64url');
     loginTokens.set(token, { adminId: String(adminId), exp: Date.now() + LOGIN_TTL });
-    return `${base}/admin/login?token=${token}`;
+    return `${base}${BASE}/login?token=${token}`;
   }
 
   const log = (req, action, detail) => AdminLog.create({ admin: req.adminId, action, detail: String(detail || '').slice(0, 500) }).catch(() => {});
@@ -144,14 +195,19 @@ module.exports = function mountAdminPanel(app, deps) {
       'X-Frame-Options': 'DENY',
       'Referrer-Policy': 'no-referrer',
       'Cache-Control': 'no-store',
+      'X-Robots-Tag': 'noindex, nofollow',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
       'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     });
     next();
   });
   const uiDir = path.join(__dirname, 'admin-ui');
-  const sendIndex = (req, res) => res.sendFile(path.join(uiDir, 'index.html'));
+  const indexHtml = require('fs').readFileSync(path.join(uiDir, 'index.html'), 'utf8').split('__BASE__').join(BASE);
+  const sendIndex = (req, res) => { res.set('Content-Type', 'text/html; charset=utf-8'); res.send(indexHtml); };
   router.get(['/', '/login'], sendIndex);
-  router.use(express.static(uiDir, { index: false, maxAge: 0 }));
+  router.get('/style.css', (req, res) => res.sendFile(path.join(uiDir, 'style.css')));
+  router.get('/app.js', (req, res) => res.sendFile(path.join(uiDir, 'app.js')));
 
   // ---- API: body parsing, origin check, login ----------------------------
   const api = express.Router();
@@ -171,16 +227,17 @@ module.exports = function mountAdminPanel(app, deps) {
 
   const failedLogins = new Map(); // ip -> { n, until }
   let globalFails = [];
-  api.get('/login-info', (req, res) => res.json({ password: PASSWORD_LOGIN, link: LINK_LOGIN }));
+  api.get('/login-info', (req, res) => res.json({ password: PASSWORD_LOGIN, link: LINK_LOGIN, totp: TOTP_ON }));
 
   api.post('/login', wrap(async (req, res) => {
     const ip = req.ip || 'x';
     const arr = (loginAttempts.get(ip) || []).filter(t => Date.now() - t < 60000);
     arr.push(Date.now()); loginAttempts.set(ip, arr);
     if (arr.length > 10) throw fail(429, 'ကြိုးစားမှု များလွန်းနေသည်။ ခဏနေမှ ပြန်စမ်းပါ။');
-    const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    const secure = req.secure || req.headers['x-forwarded-proto'] === 'https' || /^https:/i.test(String(process.env.PANEL_URL || ''));
+    if (secure) res.set('Strict-Transport-Security', 'max-age=31536000');
     const giveSession = async (adminId, how) => {
-      res.cookie(COOKIE, makeSession(adminId, how === 'password' ? 'password' : 'link'), { httpOnly: true, sameSite: 'strict', secure, path: '/admin', maxAge: SESSION_TTL });
+      res.cookie(COOKIE, makeSession(adminId, how === 'password' ? 'password' : 'link'), { httpOnly: true, sameSite: 'strict', secure, path: BASE, maxAge: SESSION_TTL });
       await AdminLog.create({ admin: adminId, action: 'login', detail: `${how} ip ${ip}` }).catch(() => {});
       res.json({ ok: true });
     };
@@ -197,7 +254,8 @@ module.exports = function mountAdminPanel(app, deps) {
       // both compared in constant time, always both evaluated
       const okU = crypto.timingSafeEqual(sha(u), sha(PANEL_USER));
       const okP = crypto.timingSafeEqual(sha(pw), sha(PANEL_PASS));
-      if (!(okU && okP)) {
+      const okC = TOTP_ON ? totpCheck(req.body.code) : true; // 2FA code is always checked too, so the error never says which part was wrong
+      if (!(okU && okP && okC)) {
         if (failedLogins.size > 5000) failedLogins.clear();
         f.n += 1; globalFails.push(Date.now());
         if (f.n >= LOCK_AFTER) { f.until = Date.now() + LOCK_MS; f.n = 0; }
@@ -205,7 +263,7 @@ module.exports = function mountAdminPanel(app, deps) {
         await new Promise(r => setTimeout(r, 800)); // slow guessing down
         await AdminLog.create({ admin: 'unknown', action: 'login_failed', detail: `ip ${ip}` }).catch(() => {});
         if (f.until > Date.now()) for (const id of (deps.adminIds || [])) safeSend(id, `⚠️ Admin Panel login မှားနေပါတယ် (ip ${ip}) - ၁၅ မိနစ် ပိတ်လိုက်ပါပြီ။ မိမိမဟုတ်ရင် PANEL_PASSWORD ပြောင်းပါ။`);
-        throw fail(401, 'Username သို့မဟုတ် Password မှားနေပါသည်။');
+        throw fail(401, TOTP_ON ? 'Username / Password / 2FA code တစ်ခုခု မှားနေပါသည်။' : 'Username သို့မဟုတ် Password မှားနေပါသည်။');
       }
       failedLogins.delete(ip);
       const adminId = (deps.adminIds || [])[0];
@@ -225,7 +283,7 @@ module.exports = function mountAdminPanel(app, deps) {
   }));
 
   api.post('/logout', (req, res) => {
-    res.clearCookie(COOKIE, { path: '/admin' });
+    res.clearCookie(COOKIE, { path: BASE });
     res.json({ ok: true });
   });
 
@@ -1082,7 +1140,7 @@ module.exports = function mountAdminPanel(app, deps) {
 
   api.use((req, res) => res.status(404).json({ error: 'not_found', message: 'Not found' }));
   router.use('/api', api);
-  app.use('/admin', router);
+  app.use(BASE, router);
 
-  return { createLoginUrl, linkLoginEnabled: LINK_LOGIN, passwordLoginEnabled: PASSWORD_LOGIN, loginPageUrl: () => (baseUrl() ? baseUrl() + '/admin' : null) };
+  return { createLoginUrl, linkLoginEnabled: LINK_LOGIN, passwordLoginEnabled: PASSWORD_LOGIN, loginPageUrl: () => (baseUrl() ? baseUrl() + BASE : null), totp: { enabled: TOTP_ON, newSecret: newTotpSecret, uri: totpUri }, _test: { hotp, b32decode, b32encode } };
 };

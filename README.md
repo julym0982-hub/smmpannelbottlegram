@@ -144,3 +144,10 @@ Panel → More → **AI Bot**. Menu ခလုတ်မဟုတ်တဲ့ စ�
 - **Username/Password login**: Render env `PANEL_USERNAME`, `PANEL_PASSWORD` (၁၀ လုံးအထက်), `PANEL_SESSION_SECRET` (long random). ၅ ကြိမ်မှားရင် IP အလိုက် ၁၅ မိနစ်ပိတ် + Admin ကို Telegram သတိပေး၊ IP အများကြီးကနေ guess ရင် အားလုံးကို နှေးစေ။ `PANEL_LINK_LOGIN=off` ထားရင် Telegram link login ပိတ်ပြီး password တစ်ခုတည်း။
 - **AI လုံခြုံရေး**: AI မှာ tool/DB/panel access လုံးဝမရှိ (စာပဲ ဖြေနိုင်)။ ထပ်ပြီး (1) prompt/panel/key တောင်းတဲ့ စာတွေကို AI မခေါ်ဘဲ တားမည် (2) customer နာမည်ကို prompt ထဲမထည့်ခင် သန့်စင် (3) AI အဖြေထဲ key/token/prompt ပါရင် မပို့ဘဲ အစားထိုး (4) Menu ခလုတ်စာတွေ AI ဆီ မရောက်။ KPay/Wave နံပါတ်၊ အနည်းဆုံးငွေဖြည့်၊ Contact Admin ခလုတ်ကို AI က settings ကနေ အလိုအလျောက် သိ။
 - Panel ထဲမှာ ယခင်သိမ်းထားတဲ့ prompt ရှိရင် အသစ်ယူချင်ရင် AI Bot → System Prompt အောက် "↩️ မူလအတိုင်း" နှိပ်ပါ။
+
+## Extra panel security (v11)
+1. **2FA (Authenticator)**: Bot ထဲမှာ `/panel2fa` ပို့ (admin only) → key ရမယ် → Google Authenticator/Authy မှာ "Enter a setup key" နဲ့ထည့် → အဲဒီ key ကို Render env `PANEL_TOTP_SECRET` မှာ ထည့်။ ပြီးရင် login မှာ username + password + app ထဲက ၆ လုံးကုဒ် လိုမယ်။ ကုဒ်တစ်ခုကို တစ်ခါပဲ သုံးလို့ရ (replay မရ)၊ key မှားထည့်ရင် password login ကို အလိုအလျောက်ပိတ် (2FA မပါဘဲ မဝင်နိုင်)။
+2. **Rate limit**: IP တစ်ခုက ၅ ကြိမ်မှားရင် ၁၅ မိနစ်ပိတ် + Admin ကို Telegram သတိပေး၊ IP များစွာကနေ စမ်းရင် အားလုံးနှေးစေ။
+3. **ဝင်ပေါက် လျှို့ဝှက်**: `PANEL_PATH=/panel-x7k9p2-secure` လို့ ထားရင် `/admin` က 404 ဖြစ်သွားမယ်။
+4. **Cookie**: HttpOnly + SameSite=Strict + Secure (https) + panel path တစ်ခုတည်း၊ ၁၂ နာရီပြည့်ရင် ထွက်၊ HSTS/no-store/noindex headers။ ဝင်ထားသမျှ session အကုန်ထုတ်ချင်ရင် `PANEL_SESSION_SECRET` ပြောင်းပြီး redeploy။
+5. `/adminlogin` Telegram link login ကို password+2FA ထက် အားနည်းတယ်လို့ ထင်ရင် `PANEL_LINK_LOGIN=off`။

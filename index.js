@@ -1330,6 +1330,24 @@ bot.command('adminlogin', async (ctx) => {
   return ctx.reply(`${text}\n\n${url}`);
 });
 
+// /panel2fa - makes a new Authenticator (2FA) key for the web panel. Admin + private chat only.
+bot.command('panel2fa', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  if (!ctx.chat || ctx.chat.type !== 'private') return;
+  if (!panel || !panel.totp) return ctx.reply('⚠️ Admin panel မစတင်သေးပါ။');
+  const secret = panel.totp.newSecret();
+  const uri = panel.totp.uri(secret, 'SMM Admin');
+  const m = await ctx.reply(
+    '🔐 Panel 2FA setup\n\n' +
+    '၁။ ဖုန်းမှာ Google Authenticator (သို့) Authy app ဖွင့်ပါ\n' +
+    '၂။ ➕ → "Enter a setup key" ကိုရွေး၊ Account: SMM Admin၊ Key: အောက်ကဟာကို ကူးထည့်၊ Type: Time based\n' +
+    '၃။ Render → Environment မှာ ဒီ key ကို PANEL_TOTP_SECRET အဖြစ် ထည့်ပြီး Save/Redeploy လုပ်ပါ\n' +
+    '၄။ ပြီးရင် ဒီစာကို ချက်ချင်း ဖျက်ပါ (key ကို တခြားသူ မမြင်စေနဲ့)\n\n' +
+    `Key:\n${secret}\n\nLink (app တချို့အတွက်):\n${uri}\n\n` +
+    (panel.totp.enabled ? '⚠️ 2FA ဖွင့်ပြီးသားပါ။ ဒီ key အသစ်ကို Render မှာ အစားထိုးမှ အသစ်ကို စတင်သုံးပါမယ်။' : 'ℹ️ PANEL_TOTP_SECRET မထည့်မချင်း 2FA မဖွင့်သေးပါ။'));
+  setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, m.message_id).catch(() => {}), 10 * 60 * 1000); // auto-delete after 10 minutes
+});
+
 bot.command('ban', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const id = ctx.message.text.split(' ')[1]; if (!id) return ctx.reply('ပုံစံ: /ban <user_id>');

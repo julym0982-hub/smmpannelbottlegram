@@ -4,7 +4,7 @@
 // =======================================================================
 const crypto = require('crypto');
 const axios = require('axios');
-const { ApiKey, AiUsage } = require('./models');
+const { ApiKey, AiUsage, MenuButton } = require('./models');
 const texts = require('./texts');
 
 const MMT_OFFSET = 6.5 * 3600 * 1000;
@@ -153,12 +153,26 @@ function remember(userId, user, assistant) {
   if (memory.size > 5000) for (const [k, v] of memory) if (Date.now() - v.at > 30 * 60 * 1000) memory.delete(k);
 }
 
-function buildSystem(vars) {
+// facts the bot already knows itself - filled in automatically so the shop owner never has to type them
+// (customers see these in the bot anyway: payment accounts, min top-up, admin-added link buttons like Contact Admin)
+async function autoFacts() {
+  const out = [];
+  const minTopup = texts.t('topup_min_amount');
+  if (minTopup) out.push(`အနည်းဆုံး ငွေဖြည့်ပမာဏ: ${minTopup} ကျပ်`);
+  const real = (n) => n && !/^0?9x+$/i.test(String(n).trim()) && !/x{4,}/i.test(String(n));
+  const pay = [];
+  if (real(texts.t('kpay_number'))) pay.push(`KPay ${texts.t('kpay_number')} (${texts.t('kpay_name')})`);
+  if (real(texts.t('wave_number'))) pay.push(`Wave ${texts.t('wave_number')} (${texts.t('wave_name')})`);
+  if (pay.length) out.push(`ငွေလွှဲလက်ခံတဲ့ account: ${pay.join('၊ ')} - ငွေဖြည့်တဲ့အခါ 💰ငွေဖြည့်ရန်💰 ခလုတ်ကနေ လုပ်ရမယ်၊ ဒီမှာ လွှဲပြီး screenshot ပို့လို့ မရဘူးလို့ ရှင်းပြပါ`);
+  try {
+    const btns = await MenuButton.find({}).lean();
+    if (btns.length) out.push(`Menu ထဲက link ခလုတ်များ (Admin/ဆက်သွယ်ရန်): ${btns.map(b => b._id).join('၊ ')} - ဆက်သွယ်ချင်ရင် ဒီခလုတ်ကို ညွှန်ပါ (link/username ကိုယ်တိုင် မစပ်ပါနဲ့)`);
+  } catch (_) { /* ignore */ }
+  return out.join('\n');
+}
+function buildSystem(vars, auto = '') {
   const base = texts.t('ai_system_prompt', vars);
   const extra = texts.t('ai_knowledge', vars).trim();
-  // facts the bot already knows itself - filled in automatically so the shop owner never has to type them
-  const minTopup = texts.t('topup_min_amount');
-  const auto = minTopup ? `အနည်းဆုံး ငွေဖြည့်ပမာဏ: ${minTopup} ကျပ်` : '';
   const facts = [auto, extra].filter(Boolean).join('\n');
   return facts ? `${base}\n\nဆိုင်အကြောင်း အချက်အလက်များ (ဒါတွေကို အခြေခံပြီး ဖြေပါ):\n${facts}` : base;
 }
@@ -170,18 +184,20 @@ function safeName(n) {
   return cleaned || 'ဖောက်သည်';
 }
 // obvious prompt-extraction / panel-attack attempts get a fixed polite reply without calling the AI at all
-const ATTACK_RE = /(system\s*prompt|initial\s*prompt|ignore\s+(all\s+|the\s+)?(previous|above|prior)|disregard\s+(all\s+)?(previous|above)|developer\s*mode|jailbreak|\bDAN\b|reveal\s+(your|the)\s+(prompt|instructions)|admin\s*panel|adminlogin|PANEL_PASSWORD|BOT_TOKEN|api[\s_-]*key|prompt\s*(ကို|ပြ|ပေး)|ညွှန်ကြားချက်\s*(တွေ|များ)?\s*(ကို)?\s*(ပြ|မေ့|ကူးပေး))/i;
+const ATTACK_RE = /(system\s*prompt|initial\s*prompt|ignore\s+(all\s+|the\s+)?(previous|above|prior)|disregard\s+(all\s+)?(previous|above)|developer\s*mode|jailbreak|\bDAN\b|reveal\s+(your|the)\s+(prompt|instructions)|admin\s*panel|adminlogin|panel2fa|PANEL_(PASSWORD|TOTP|PATH|USERNAME)|authenticator|BOT_TOKEN|api[\s_-]*key|prompt\s*(ကို|ပြ|ပေး)|ညွှန်ကြားချက်\s*(တွေ|များ)?\s*(ကို)?\s*(ပြ|မေ့|ကူးပေး))/i;
 const BLOCKED_REPLY = 'အဲဒါလေးတွေတော့ ပြောပြလို့ မရပါဘူးရှင့် 🙏 service ဝယ်တာ၊ ငွေဖြည့်တာ၊ order ကိစ္စတွေဆို ကူညီပေးပါ့မယ်နော်။';
 function secretValues() {
-  const names = ['BOT_TOKEN', 'MONGODB_URI', 'PANEL_PASSWORD', 'PANEL_SESSION_SECRET', 'AI_KEY_SECRET', 'SHWEBOOST_API_KEY', 'HIROSHI_API_KEY', 'SECSERS_API_KEY'];
+  const names = ['BOT_TOKEN', 'MONGODB_URI', 'PANEL_PASSWORD', 'PANEL_SESSION_SECRET', 'PANEL_TOTP_SECRET', 'PANEL_USERNAME', 'AI_KEY_SECRET', 'SHWEBOOST_API_KEY', 'HIROSHI_API_KEY', 'SECSERS_API_KEY'];
   return names.map(n => process.env[n]).filter(v => v && String(v).length >= 8).map(String);
 }
 const SECRET_PATTERNS = [/AIza[0-9A-Za-z_\-]{20,}/, /gsk_[A-Za-z0-9]{20,}/, /\b\d{8,10}:[A-Za-z0-9_\-]{30,}\b/, /mongodb(\+srv)?:\/\//i, /\/admin\/login\?token=/i];
 // true when the model's answer would leak a secret or a long piece of the system prompt
-function leaks(out, system) {
+function leaks(out, prompt) {
   if (SECRET_PATTERNS.some(re => re.test(out))) return true;
   if (secretValues().some(v => out.includes(v))) return true;
-  const sys = String(system).replace(/\s+/g, ' '), o = String(out).replace(/\s+/g, ' ');
+  // the example dialogue lines and the shop facts are meant to be said to customers, so only the rules part is protected
+  const sys = String(prompt).split('\n').filter(l => !/^\s*(ဝန်ထမ်း|ဧည့်သည်)\s*[:：]/.test(l)).join(' ').replace(/\s+/g, ' ');
+  const o = String(out).replace(/\s+/g, ' ');
   for (let i = 0; i + 40 <= sys.length; i += 20) if (o.includes(sys.slice(i, i + 40))) return true;
   return false;
 }
@@ -191,9 +207,10 @@ async function chat({ userId, name, balance, text }) {
   if (ATTACK_RE.test(text)) { console.error(`AI guard: blocked suspicious message from ${userId}`); return { ok: true, text: BLOCKED_REPLY }; }
   const lim = await takeQuestion(userId);
   if (!lim.allowed) return { ok: false, reason: 'limit' };
-  const system = buildSystem({ name: safeName(name), balance: balance == null ? '' : balance });
+  const vars = { name: safeName(name), balance: balance == null ? '' : balance };
+  const system = buildSystem(vars, await autoFacts());
   const res = await ask({ system, history: getHistory(userId), text });
-  if (res.ok && leaks(res.text, system)) { console.error(`AI guard: blocked a leaking reply to ${userId}`); res.text = BLOCKED_REPLY; }
+  if (res.ok && leaks(res.text, texts.t('ai_system_prompt', vars))) { console.error(`AI guard: blocked a leaking reply to ${userId}`); res.text = BLOCKED_REPLY; }
   if (res.ok) remember(userId, text, res.text);
   // the AI never answered (all keys down) - do not charge the customer a question
   else if (lim.used) await AiUsage.findOneAndUpdate({ _id: `${userId}:${today()}` }, { $inc: { count: -1 } });
@@ -203,4 +220,4 @@ async function chat({ userId, name, balance, text }) {
 // settings edited from Panel > AI Bot (kept out of the normal settings lists)
 const SETTING_KEYS = ['ai_enabled', 'ai_model_gemini', 'ai_model_groq', 'ai_limit_enabled', 'ai_limit_per_day', 'ai_temperature', 'ai_max_tokens', 'ai_history_turns', 'ai_limit_msg', 'ai_fallback', 'ai_knowledge', 'ai_system_prompt'];
 
-module.exports = { SETTING_KEYS, encrypt, decrypt, enabled, hasKeys, ask, chat, buildSystem, today, takeQuestion, COOLDOWN };
+module.exports = { SETTING_KEYS, encrypt, decrypt, enabled, hasKeys, ask, chat, buildSystem, autoFacts, today, takeQuestion, COOLDOWN };
