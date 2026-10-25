@@ -254,27 +254,41 @@
     const params = new URLSearchParams(location.search);
     const token = params.get('token');
     const msg = h('p', { class: 'muted' });
+    const user = h('input', { type: 'text', placeholder: 'Username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false' });
+    const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password' });
     const btn = h('button', { class: 'btn primary', style: 'width:100%' }, 'ဝင်မည်');
+    const box = h('div', { class: 'hide' }, user, pass);
     const card = h('div', { class: 'card' },
       h('div', { class: 'logo' }, icon('dash')),
-      h('h1', {}, 'SMM Admin Panel'), msg, btn);
+      h('h1', {}, 'SMM Admin Panel'), msg, box, btn);
     app.appendChild(h('div', { class: 'login' }, card));
-    const login = async () => {
+    const done = async () => { history.replaceState(null, '', '/admin'); await boot(); };
+    const pwLogin = async () => {
       btn.disabled = true; msg.textContent = 'ဝင်နေပါသည်...';
-      try {
-        await POST('/login', { token });
-        history.replaceState(null, '', '/admin');
-        await boot();
-      } catch (e) { msg.textContent = e.message; btn.classList.add('hide'); btn.disabled = false; }
+      try { await POST('/login', { username: user.value, password: pass.value }); pass.value = ''; await done(); }
+      catch (e) { msg.textContent = e.message; btn.disabled = false; pass.value = ''; }
     };
     if (token) {
       msg.textContent = 'Admin အတည်ပြုနေပါသည်...';
-      btn.onclick = login;
-      login();
-    } else {
-      msg.replaceChildren('Telegram bot ထဲမှာ ', h('code', {}, '/adminlogin'), ' လို့ ပို့ပါ။ ပြန်လာတဲ့ button ကိုနှိပ်ရင် ဒီ panel ထဲ ဝင်ရပါမယ်။');
       btn.classList.add('hide');
+      (async () => {
+        try { await POST('/login', { token }); await done(); }
+        catch (e) { msg.textContent = e.message; }
+      })();
+      return;
     }
+    GET('/login-info').then(info => {
+      if (info.password) {
+        box.classList.remove('hide'); box.style.cssText = 'display:grid;gap:10px;margin:12px 0';
+        msg.textContent = 'Username နဲ့ Password ထည့်ပြီး ဝင်ပါ။';
+        btn.onclick = pwLogin;
+        pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') pwLogin(); });
+        user.focus();
+      } else {
+        btn.classList.add('hide');
+        msg.replaceChildren('Telegram bot ထဲမှာ ', h('code', {}, '/adminlogin'), ' လို့ ပို့ပါ။ ပြန်လာတဲ့ button ကိုနှိပ်ရင် ဒီ panel ထဲ ဝင်ရပါမယ်။');
+      }
+    }).catch(() => { btn.classList.add('hide'); msg.textContent = 'Server နဲ့ ချိတ်ဆက်မရပါ။'; });
   }
 
   // ------------------------------------------------------------------

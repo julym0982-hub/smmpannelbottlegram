@@ -132,7 +132,7 @@ a { color: var(--accent); }
 .btn.sm { min-height: 32px; padding: 4px 10px; font-size: .82rem; border-radius: 8px; }
 .btn.ghost { border-color: transparent; background: transparent; }
 .btn.icon { padding: 0; width: 40px; }
-input[type=text], input[type=number], input[type=search], input[type=url], select, textarea {
+input[type=text], input[type=password], input[type=number], input[type=search], input[type=url], select, textarea {
   width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; min-height: 40px; outline: none;
 }
 textarea { min-height: 96px; resize: vertical; }
