@@ -64,11 +64,12 @@
   // ------------------------------------------------------------------
   // api
   // ------------------------------------------------------------------
+  const BASE = (document.querySelector('meta[name=panel-base]') || {}).content || '/admin';
   class ApiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
   async function api(method, url, body) {
     let res;
     try {
-      res = await fetch('/admin/api' + url, {
+      res = await fetch(BASE + '/api' + url, {
         method, credentials: 'same-origin',
         headers: body !== undefined || method !== 'GET' ? { 'Content-Type': 'application/json' } : {},
         body: method === 'GET' ? undefined : JSON.stringify(body === undefined ? {} : body)
@@ -257,16 +258,17 @@
     const user = h('input', { type: 'text', placeholder: 'Username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false' });
     const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password' });
     const btn = h('button', { class: 'btn primary', style: 'width:100%' }, 'ဝင်မည်');
-    const box = h('div', { class: 'hide' }, user, pass);
+    const code = h('input', { type: 'text', class: 'hide', placeholder: '2FA code (၆ လုံး)', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 8, spellcheck: 'false' });
+    const box = h('div', { class: 'hide' }, user, pass, code);
     const card = h('div', { class: 'card' },
       h('div', { class: 'logo' }, icon('dash')),
       h('h1', {}, 'SMM Admin Panel'), msg, box, btn);
     app.appendChild(h('div', { class: 'login' }, card));
-    const done = async () => { history.replaceState(null, '', '/admin'); await boot(); };
+    const done = async () => { history.replaceState(null, '', BASE); await boot(); };
     const pwLogin = async () => {
       btn.disabled = true; msg.textContent = 'ဝင်နေပါသည်...';
-      try { await POST('/login', { username: user.value, password: pass.value }); pass.value = ''; await done(); }
-      catch (e) { msg.textContent = e.message; btn.disabled = false; pass.value = ''; }
+      try { await POST('/login', { username: user.value, password: pass.value, code: code.value }); pass.value = ''; code.value = ''; await done(); }
+      catch (e) { msg.textContent = e.message; btn.disabled = false; pass.value = ''; code.value = ''; }
     };
     if (token) {
       msg.textContent = 'Admin အတည်ပြုနေပါသည်...';
@@ -280,9 +282,10 @@
     GET('/login-info').then(info => {
       if (info.password) {
         box.classList.remove('hide'); box.style.cssText = 'display:grid;gap:10px;margin:12px 0';
-        msg.textContent = 'Username နဲ့ Password ထည့်ပြီး ဝင်ပါ။';
+        if (info.totp) code.classList.remove('hide');
+        msg.textContent = info.totp ? 'Username၊ Password နဲ့ Authenticator app ထဲက ၆ လုံးကုဒ် ထည့်ပါ။' : 'Username နဲ့ Password ထည့်ပြီး ဝင်ပါ။';
         btn.onclick = pwLogin;
-        pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') pwLogin(); });
+        for (const el of [pass, code]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') pwLogin(); });
         user.focus();
       } else {
         btn.classList.add('hide');
@@ -442,7 +445,7 @@
   function depositCard(d, reload) {
     const pending = d.status === 'pending';
     const shot = d.hasPhoto
-      ? h('div', { class: 'shot', style: `background-image:url(/admin/api/deposits/${d.id}/photo)`, onclick: () => lightbox(`/admin/api/deposits/${d.id}/photo`), title: 'ကြည့်ရန်' })
+      ? h('div', { class: 'shot', style: `background-image:url(${BASE}/api/deposits/${d.id}/photo)`, onclick: () => lightbox(`${BASE}/api/deposits/${d.id}/photo`), title: 'ကြည့်ရန်' })
       : h('div', { class: 'shot' }, 'No img');
     async function act(btn, fn, okMsg) { const r = await busy(btn, fn); if (r !== undefined) { toast(okMsg, 'ok'); reload(); pollAlerts(); } else reload(); }
     return h('div', { class: 'card' },
