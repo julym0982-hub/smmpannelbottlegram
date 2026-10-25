@@ -157,3 +157,6 @@ Panel → More → **AI Bot**. Menu ခလုတ်မဟုတ်တဲ့ စ�
 - Bot ကို block/chat ဖျက်ထားတဲ့ user ဆီ စာပို့ရင် error မတက်/မပျက်: `blockedBot` လို့ မှတ် → နောက် broadcast တွေ ကျော် → အဲဒီ user ပြန်စာပို့ရင် (သို့) Telegram `my_chat_member` update ရရင် အလိုအလျောက် ပြန်ဖွင့်။ Telegram 429 (flood) ကို စောင့်ပြီး ပြန်ပို့။ Broadcast ပြီးရင် "ပို့နိုင်/block/error" ခွဲ report။
 - Panel → More → "စာပို့ရန်": User အားလုံးဆီ + User ID ထည့်ပြီး တစ်ယောက်ချင်း ပို့ရန် ၂ ခုလုံး ရှိ။ Bot ထဲမှာလည်း `/allsendmessage` နဲ့ `/sendmessage <id>`။
 - RAM: idle ၆ နာရီကျော် user state တွေကို အလိုအလျောက် ရှင်း။
+
+## v13 – ဈေးနှုန်း တိုက်ဆိုင်စစ်ရန်
+Panel → Settings → ဈေးနှုန်း → provider တစ်ခုချင်းစီအောက်က "🧮 Provider website နဲ့ ဈေးမကိုက်ရင်..." မှာ service ID၊ အရေအတွက်၊ provider website ပြတဲ့ ကျသင့်ငွေ ထည့်ရင် website သုံးတဲ့ USD→MMK rate ကို တွက်ပေးမယ်။ (shweboost website က ≈2100 သုံး၊ bot default 4400 ဖြစ်နေရင် ဈေး ၂ ဆလောက် ကွာမယ်။)

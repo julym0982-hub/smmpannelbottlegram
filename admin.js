@@ -821,6 +821,21 @@ module.exports = function mountAdminPanel(app, deps) {
     if (!providers.CONFIG[name]) throw fail(404, 'Provider မတွေ့ပါ');
     return name;
   }
+  // "what USD->MMK rate does the provider's own website use?" - the admin copies the MMK price shown on the provider site for
+  // one service + quantity, and we work the rate back from the provider's USD price
+  api.get('/pricing/implied-rate', wrap(async (req, res) => {
+    const p = checkProvider(String(req.query.provider || ''));
+    const qty = Number(req.query.qty), shown = Number(req.query.shown);
+    if (!(qty > 0) || !(shown > 0)) throw fail(400, 'အရေအတွက်နဲ့ ပြတဲ့ကျသင့်ငွေ ထည့်ပါ');
+    let info;
+    try { info = await providers.fetchServiceInfo(p, String(req.query.service || '').trim()); }
+    catch (err) { throw fail(404, err.message); }
+    const usd = (Number(info.rate) / 1000) * qty;
+    if (!(usd > 0)) throw fail(400, 'ဒီ service ရဲ့ ဈေး 0 ဖြစ်နေလို့ တွက်မရပါ');
+    const implied = shown / usd;
+    res.json({ ok: true, name: info.providerName, usdPer1000: Number(info.rate), usdForQty: usd, implied, rounded: Math.round(implied) });
+  }));
+
   api.get('/providers/:p/services', wrap(async (req, res) => {
     const p = checkProvider(req.params.p);
     let list;
