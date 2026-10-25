@@ -50,9 +50,11 @@ async function callProvider(provider, apiKey, { system, history, text }) {
   if (provider === 'groq') {
     const model = texts.t('ai_model_groq').trim();
     const messages = [{ role: 'system', content: system }, ...history.map(m => ({ role: m.role, content: m.text })), { role: 'user', content: text }];
+    const body = { model, messages, temperature, max_tokens: maxTokens };
+    if (model.includes('gpt-oss')) body.reasoning_effort = 'low'; // reasoning model: keep it fast, don't burn max_tokens on thinking
     const { data } = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
-      { model, messages, temperature, max_tokens: maxTokens },
+      body,
       { timeout: 30000, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` } }
     );
     const out = data && data.choices && data.choices[0] && data.choices[0].message && String(data.choices[0].message.content || '').trim();

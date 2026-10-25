@@ -57,7 +57,7 @@ const DEFAULTS = {
   // ---- AI chat assistant (edited from Panel > AI Bot)
   ai_enabled: '1', // 1 = free text from customers is answered by the assistant
   ai_model_gemini: 'gemini-flash-latest', // set the exact model id you want in the panel
-  ai_model_groq: 'llama-3.3-70b-versatile',
+  ai_model_groq: 'openai/gpt-oss-120b',
   ai_limit_enabled: '1',
   ai_limit_per_day: '20',
   ai_temperature: '0.8',
@@ -100,6 +100,12 @@ const cache = {};
 async function preload() {
   const rows = await Setting.find({});
   for (const r of rows) cache[r._id] = r.value;
+  // Groq retired these models (Aug 2026) -> auto-switch a saved old value to the new default
+  const RETIRED_GROQ = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'qwen/qwen3-32b', 'meta-llama/llama-4-scout-17b-16e-instruct'];
+  if (RETIRED_GROQ.includes(String(cache.ai_model_groq || '').trim())) {
+    cache.ai_model_groq = DEFAULTS.ai_model_groq;
+    try { await Setting.updateOne({ _id: 'ai_model_groq' }, { $set: { value: DEFAULTS.ai_model_groq } }); } catch (e) { /* ignore */ }
+  }
 }
 
 function getRaw(key) {
