@@ -126,3 +126,16 @@ Facebook အတွက် category/service တွေကို ခုနောက�
 - Main menu မှာ "🆘 Order အကူအညီ" → Order ID ထည့် (သို့) နောက်ဆုံး order ကနေ ရွေး → ပြန်ဖြည့် / မြန်ပေး / ပယ်ဖျက်ပြီး ငွေပြန်ပေး။ Refill နဲ့ Cancel ကို provider API ကို အလိုအလျောက်ခေါ်၊ API နဲ့ မရတာ (speed up စသည်) ကို Admin ဆီ Telegram + Panel "Help Orders" page ကို ပို့။
 - Panel > Settings > **Help & Data** မှာ Help ကို ဖွင့်/ပိတ် (ပိတ်ရင် user တွေ ခလုတ် မမြင်ရ)။
 - **History ရှင်းလင်းခြင်း**: ပြီးဆုံးပြီးသား order ကို N ရက်ကျော်ရင် နေ့စဉ် အလိုအလျောက်ရှင်း (default 5 ရက်)၊ user တစ်ယောက်စီရဲ့ နောက်ဆုံး N ခု (default 6) အမြဲချန်၊ active order မထိ။ ရက်/အရေအတွက်ကို panel ကနေ ပြင်လို့ရ၊ "ကြိုကြည့်" နဲ့ "ယခုရှင်းမည်" ပါ။ Dashboard ရောင်းရငွေစာရင်းကတော့ ဆက်မှတ်ထားမည်။
+
+## Refill tracking / provider flags
+- Service စာရင်းထဲက `refill`/`cancel` flag ကို သိမ်းထားပြီး မပါတဲ့ service မှာ user ကို ကြိုပြောပြမည် (ထည့်ပြီးသား service တွေအတွက် Panel > Services > "Provider ဈေး/min/max Sync" တစ်ခါနှိပ်ပါ)။
+- Refill ကို API နဲ့ ပို့ပြီးရင် `refill_status` ကို ၁၀ မိနစ်တစ်ခါ စစ်ပြီး Completed/Rejected ဖြစ်တာနဲ့ user ကို အလိုအလျောက် အကြောင်းကြားမည်။
+- Provider ပြန်ပို့တဲ့ `charge` ကို သုံးပြီး အမြတ်ကို တိကျစွာ တွက်မည်။
+
+## AI Bot (Gemini + Groq)
+Panel → More → **AI Bot**. Menu ခလုတ်မဟုတ်တဲ့ စာတွေကို AI က ဖြေပေးပါတယ်။
+- API key များ ထည့်/ပြင်/ဖျက် (AES-256-GCM encrypt, browser ဆီ မပို့ပါ)။ Key တစ်ခု 429/quota ပြည့်ရင် နောက် key ကို user မသိအောင် ချက်ချင်းပြောင်းပြီး မေးခွန်းတူ ပြန်မေးပါတယ်။
+- နေ့စဉ် user တစ်ယောက်စီ limit (on/off + အရေအတွက်)၊ မြန်မာအချိန် 00:00 မှာ reset။
+- System prompt / ဆိုင်အချက်အလက် / limit စာ / fallback စာ ကို panel ကနေ ပြင်နိုင်။
+- **Gemini model ID** ကို Panel မှာ အတိအကျ ထည့်ပါ (default `gemini-flash-latest`)။
+- Render env: `AI_KEY_SECRET` (ရွေးချယ်) — မထည့်ရင် BOT_TOKEN ကို သုံးပါတယ်။ ပြောင်းလိုက်ရင် key တွေ ပြန်ထည့်ရမယ်။

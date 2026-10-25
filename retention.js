@@ -7,7 +7,7 @@
 //    daily Stat collection, so the dashboard totals stay correct
 //  - old closed deposits, help requests and admin logs (>30 days) go too
 // =======================================================================
-const { Order, Deposit, HelpRequest, AdminLog, Stat } = require('./models');
+const { Order, Deposit, HelpRequest, AdminLog, Stat, AiUsage } = require('./models');
 const texts = require('./texts');
 
 const MMT_OFFSET = 6.5 * 3600 * 1000;
@@ -73,6 +73,7 @@ async function runCleanup({ dryRun = false } = {}) {
     res.deposits = (await Deposit.deleteMany({ status: { $ne: 'pending' }, createdAt: { $lt: cutoff30 } })).deletedCount;
     res.help = (await HelpRequest.deleteMany({ status: 'done', createdAt: { $lt: cutoff30 } })).deletedCount;
     res.logs = (await AdminLog.deleteMany({ createdAt: { $lt: cutoff30 } })).deletedCount;
+    await AiUsage.deleteMany({ createdAt: { $lt: new Date(Date.now() - 3 * DAY) } }); // daily question counters are only needed for today
     await texts.setText('history_last_cleanup', new Date().toISOString());
   }
   return res;

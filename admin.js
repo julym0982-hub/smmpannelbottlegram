@@ -9,9 +9,10 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const axios = require('axios');
-const { Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, MenuButton, HelpRequest, Stat } = require('./models');
+const { Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, MenuButton, HelpRequest, Stat, ApiKey, AiUsage } = require('./models');
 const mongoose = require('mongoose');
 const retention = require('./retention');
+const ai = require('./ai');
 const providers = require('./providers');
 const texts = require('./texts');
 
@@ -660,6 +661,8 @@ module.exports = function mountAdminPanel(app, deps) {
         const f = map.get(String(s.providerServiceId));
         if (!f) { missing++; continue; }
         s.rate = Number(f.rate); s.min = Number(f.min); s.max = Number(f.max); s.providerName = f.name;
+        if (typeof f.refill === 'boolean') s.refill = f.refill;
+        if (typeof f.cancel === 'boolean') s.cancel = f.cancel;
         s.lastSynced = new Date();
         await s.save(); ok++;
       }
@@ -741,7 +744,9 @@ module.exports = function mountAdminPanel(app, deps) {
       const svc = await Service.create({
         categoryId: category._id, label, provider, providerServiceId: sid, providerName: info.name,
         rate: Number(info.rate), min: Number(info.min), max: Number(info.max),
-        avgTime: info.average_time || info.averageTime || null, lastSynced: new Date()
+        avgTime: info.average_time || info.averageTime || null,
+        refill: typeof info.refill === 'boolean' ? info.refill : undefined, cancel: typeof info.cancel === 'boolean' ? info.cancel : undefined,
+        lastSynced: new Date()
       });
       created.push({ id: String(svc._id), label });
     }
@@ -783,7 +788,7 @@ module.exports = function mountAdminPanel(app, deps) {
       pricing[p] = { usd_to_mmk: texts.t(`${p}_usd_to_mmk`), markup: texts.t(`${p}_markup`), configured: !!(providers.CONFIG[p].url && providers.CONFIG[p].key) };
     }
     const payment = Object.fromEntries(PAYMENT_KEYS.map(k => [k, texts.t(k)]));
-    const hidden = new Set([...PAYMENT_KEYS, ...NUMERIC_KEYS(), ...FEATURE_KEYS]);
+    const hidden = new Set([...PAYMENT_KEYS, ...NUMERIC_KEYS(), ...FEATURE_KEYS, ...ai.SETTING_KEYS]);
     const messages = texts.allKeys().filter(k => !hidden.has(k)).map(k => ({
       key: k, value: texts.getRaw(k), isDefault: texts.getRaw(k) === texts.DEFAULTS[k], placeholders: [...new Set((texts.DEFAULTS[k].match(/\$\{\w+\}/g) || []))]
     }));
@@ -800,7 +805,7 @@ module.exports = function mountAdminPanel(app, deps) {
     if (!entries.length || entries.length > 40) throw fail(400, 'values မမှန်ပါ');
     // validate everything first so a bad value never leaves a half-applied change
     for (const [k, v] of entries) {
-      if (!texts.allKeys().includes(k) || k === 'history_last_cleanup') throw fail(400, `"${k}" ဆိုတဲ့ key မရှိပါ`);
+      if (!texts.allKeys().includes(k) || k === 'history_last_cleanup' || ai.SETTING_KEYS.includes(k)) throw fail(400, `"${k}" ဆိုတဲ့ key မရှိပါ`);
       if (typeof v !== 'string' && typeof v !== 'number') throw fail(400, `${k} မမှန်ပါ`);
       const sv = String(v).trim();
       if (k === 'help_enabled' || k === 'history_auto') {
@@ -907,6 +912,118 @@ module.exports = function mountAdminPanel(app, deps) {
     const r = await retention.runCleanup({ dryRun });
     if (!dryRun) log(req, 'history_cleanup', `orders ${r.orders}, deposits ${r.deposits}, help ${r.help}, logs ${r.logs}`);
     res.json({ ok: true, dryRun, ...r });
+  }));
+
+  // ======================================================================
+  // AI Bot: API keys (encrypted, never sent to the browser), limits, prompt
+  // ======================================================================
+  const keyView = (k) => {
+    const t = ai.today();
+    const parked = k.exhaustedUntil && new Date(k.exhaustedUntil).getTime() > Date.now();
+    return {
+      id: String(k._id), provider: k.provider, label: k.label || '', masked: '••••' + (k.last4 || ''),
+      status: !k.isActive ? 'disabled' : parked ? 'limit' : 'active', until: parked ? k.exhaustedUntil : null,
+      isActive: !!k.isActive, today: k.usageDay === t ? k.dailyUsageCount || 0 : 0, total: k.totalCount || 0,
+      lastError: k.lastError || '', lastErrorAt: k.lastErrorAt || null, createdAt: k.createdAt
+    };
+  };
+  const AI_TOGGLES = ['ai_enabled', 'ai_limit_enabled'];
+  const AI_LIMITS = { // key -> [min, max, integer?]
+    ai_limit_per_day: [1, 100000, true], ai_temperature: [0, 2, false], ai_max_tokens: [64, 8192, true], ai_history_turns: [0, 20, true]
+  };
+  const AI_TEXT_MAX = { ai_system_prompt: 8000, ai_knowledge: 6000, ai_limit_msg: 1000, ai_fallback: 1000, ai_model_gemini: 100, ai_model_groq: 100 };
+
+  api.get('/ai', wrap(async (req, res) => {
+    const keys = await ApiKey.find({}).sort({ createdAt: 1 }).lean();
+    const usage = await AiUsage.find({ _id: new RegExp(':' + ai.today() + '$') }).lean();
+    res.json({
+      settings: Object.fromEntries(ai.SETTING_KEYS.map(k => [k, texts.getRaw(k)])),
+      defaults: { ai_system_prompt: texts.DEFAULTS.ai_system_prompt, ai_limit_msg: texts.DEFAULTS.ai_limit_msg, ai_fallback: texts.DEFAULTS.ai_fallback },
+      keys: keys.map(keyView),
+      stats: { usersToday: usage.length, questionsToday: usage.reduce((a, u) => a + (u.count || 0), 0) }
+    });
+  }));
+
+  api.post('/ai/settings', wrap(async (req, res) => {
+    const values = req.body.values && typeof req.body.values === 'object' ? req.body.values : null;
+    if (!values || !Object.keys(values).length) throw fail(400, 'values မပါပါ');
+    const clean = {};
+    for (const [k, v] of Object.entries(values)) {
+      if (!ai.SETTING_KEYS.includes(k)) throw fail(400, `"${k}" ဆိုတဲ့ key မရှိပါ`);
+      const sv = String(v === null || v === undefined ? '' : v).trim();
+      if (AI_TOGGLES.includes(k)) { if (!['0', '1'].includes(sv)) throw fail(400, `${k} သည် 0 သို့ 1 ဖြစ်ရမည်`); }
+      else if (AI_LIMITS[k]) {
+        const [min, max, int] = AI_LIMITS[k]; const n = Number(sv);
+        if (!sv || !Number.isFinite(n) || n < min || n > max || (int && !Number.isInteger(n))) throw fail(400, `${k} သည် ${min} မှ ${max} ကြား ဂဏန်းဖြစ်ရမည်`);
+      } else {
+        if (sv.length > AI_TEXT_MAX[k]) throw fail(400, `${k} အရှည်လွန်နေသည် (${AI_TEXT_MAX[k]} ထိ)`);
+        if (!sv && k !== 'ai_knowledge') throw fail(400, `${k} မှာ စာသား ထည့်ပါ`);
+        if ((k === 'ai_model_gemini' || k === 'ai_model_groq') && /\s/.test(sv)) throw fail(400, 'Model ID မှာ space မပါရပါ');
+      }
+      clean[k] = sv;
+    }
+    for (const [k, v] of Object.entries(clean)) await texts.setText(k, v);
+    log(req, 'ai_settings', Object.keys(clean).join(', '));
+    res.json({ ok: true });
+  }));
+  api.post('/ai/settings/reset', wrap(async (req, res) => {
+    const key = String(req.body.key || '');
+    if (!ai.SETTING_KEYS.includes(key)) throw fail(400, 'key မမှန်ပါ');
+    await texts.resetText(key);
+    log(req, 'ai_settings_reset', key);
+    res.json({ ok: true, value: texts.getRaw(key) });
+  }));
+
+  function cleanKey(v) {
+    const k = typeof v === 'string' ? v.trim() : '';
+    if (k.length < 10 || k.length > 300 || /\s/.test(k)) throw fail(400, 'API key မမှန်ပါ (space မပါရ၊ အရှည်စစ်ပါ)');
+    return k;
+  }
+  api.post('/ai/keys', wrap(async (req, res) => {
+    const provider = String(req.body.provider || '');
+    if (!['gemini', 'groq'].includes(provider)) throw fail(400, 'Provider ကို Gemini သို့မဟုတ် Groq ရွေးပါ');
+    const key = cleanKey(req.body.key);
+    const k = await ApiKey.create({ provider, label: str(req.body.label, 'Label', { max: 40, required: false }), encryptedKey: ai.encrypt(key), last4: key.slice(-4) });
+    log(req, 'ai_key_add', `${provider} …${k.last4}`);
+    res.json({ ok: true, key: keyView(k) });
+  }));
+  async function loadKey(id) {
+    if (!isOid(id)) throw fail(404, 'Key မတွေ့ပါ');
+    const k = await ApiKey.findById(id);
+    if (!k) throw fail(404, 'Key မတွေ့ပါ');
+    return k;
+  }
+  api.patch('/ai/keys/:id', wrap(async (req, res) => {
+    const k = await loadKey(req.params.id);
+    if (req.body.label !== undefined) k.label = str(req.body.label, 'Label', { max: 40, required: false });
+    if (req.body.isActive !== undefined) k.isActive = !!req.body.isActive;
+    if (req.body.key) { const nk = cleanKey(req.body.key); k.encryptedKey = ai.encrypt(nk); k.last4 = nk.slice(-4); k.exhaustedUntil = null; k.lastError = ''; }
+    await k.save();
+    log(req, 'ai_key_edit', `${k.provider} …${k.last4}`);
+    res.json({ ok: true, key: keyView(k) });
+  }));
+  api.post('/ai/keys/:id/reset', wrap(async (req, res) => {
+    const k = await loadKey(req.params.id);
+    k.exhaustedUntil = null; k.lastError = ''; await k.save();
+    res.json({ ok: true });
+  }));
+  api.delete('/ai/keys/:id', wrap(async (req, res) => {
+    const k = await loadKey(req.params.id);
+    await k.deleteOne();
+    log(req, 'ai_key_remove', `${k.provider} …${k.last4}`);
+    res.json({ ok: true });
+  }));
+  // tests ONE key with a tiny question (works even if the key is switched off / parked)
+  api.post('/ai/keys/:id/test', wrap(async (req, res) => {
+    const k = await loadKey(req.params.id);
+    const r = await ai.ask({ system: 'Reply with the single word: ok', text: 'ping', onlyKeyId: String(k._id) });
+    res.json({ ok: r.ok, reply: r.ok ? r.text.slice(0, 80) : '', error: r.ok ? '' : (r.detail || r.reason) });
+  }));
+  // chat with the assistant exactly as a customer would (current prompt + keys), no daily limit
+  api.post('/ai/test', wrap(async (req, res) => {
+    const message = str(req.body.message, 'Message', { max: 1000 });
+    const r = await ai.ask({ system: ai.buildSystem({ name: 'Admin စမ်းသပ်သူ', balance: '' }), history: Array.isArray(req.body.history) ? req.body.history.slice(-12).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text || '').slice(0, 1000) })) : [], text: message });
+    res.json({ ok: r.ok, reply: r.ok ? r.text : '', provider: r.provider || '', error: r.ok ? '' : (r.detail || r.reason) });
   }));
 
   api.get('/logs', wrap(async (req, res) => {

@@ -48,6 +48,8 @@ const ServiceSchema = new mongoose.Schema({
   min: Number,
   max: Number,
   avgTime: String,
+  refill: Boolean, // provider says this service can be refilled (from the provider's service list)
+  cancel: Boolean, // provider says this service can be cancelled
   active: { type: Boolean, default: true }, // admin panel can hide a service without deleting it
   manualDuration: String, // admin-set override, e.g. "18 မိနစ်" - used when the provider API gives no duration at all (ShweBoost never does)
   lastSynced: Date,
@@ -134,6 +136,7 @@ const HelpRequestSchema = new mongoose.Schema({
   type: { type: String, enum: ['refill', 'speed', 'cancel'] },
   status: { type: String, enum: ['open', 'done'], default: 'open', index: true },
   auto: { type: Boolean, default: false }, // true = already sent to the provider API automatically
+  refillId: String, // provider's refill id - used to follow the refill until it completes
   result: String, // short note about what happened
   provider: String,
   providerOrderId: String,
@@ -153,7 +156,33 @@ const StatSchema = new mongoose.Schema({
   profit: { type: Number, default: 0 }
 });
 
+// AI assistant API keys (Gemini / Groq). The key itself is stored AES-256-GCM
+// encrypted and is never sent to the browser - only the last 4 characters.
+const ApiKeySchema = new mongoose.Schema({
+  provider: { type: String, enum: ['gemini', 'groq'], required: true },
+  label: String,
+  encryptedKey: { type: String, required: true },
+  last4: String,
+  isActive: { type: Boolean, default: true },
+  exhaustedUntil: Date, // set when the provider answers 429 / invalid key; key is skipped until then
+  usageDay: String, // YYYY-MM-DD (Myanmar) that dailyUsageCount belongs to
+  dailyUsageCount: { type: Number, default: 0 },
+  totalCount: { type: Number, default: 0 },
+  lastError: String,
+  lastErrorAt: Date,
+  createdAt: { type: Date, default: Date.now }
+});
+
+// questions asked per user per day (the daily limit)
+const AiUsageSchema = new mongoose.Schema({
+  _id: { type: String }, // "<userId>:<YYYY-MM-DD>"
+  count: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now }
+});
+
 module.exports = {
+  ApiKey: mongoose.model('ApiKey', ApiKeySchema),
+  AiUsage: mongoose.model('AiUsage', AiUsageSchema),
   HelpRequest: mongoose.model('HelpRequest', HelpRequestSchema),
   Counter: mongoose.model('Counter', CounterSchema),
   Stat: mongoose.model('Stat', StatSchema),

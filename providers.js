@@ -131,7 +131,9 @@ async function fetchServiceInfo(provider, providerServiceId) {
     rate: Number(found.rate),
     min: Number(found.min),
     max: Number(found.max),
-    avgTime: rawTime ? String(rawTime).trim() : null
+    avgTime: rawTime ? String(rawTime).trim() : null,
+    refill: typeof found.refill === 'boolean' ? found.refill : undefined,
+    cancel: typeof found.cancel === 'boolean' ? found.cancel : undefined
   };
 }
 
@@ -194,8 +196,18 @@ async function cancelOrder(provider, providerOrderId) {
 // (service has no refill, still within its refill window, ...).
 async function refillOrder(provider, providerOrderId) {
   const res = await call(provider, { action: 'refill', order: String(providerOrderId) });
-  if (res && (res.refill || res.refill === 0) && !res.error) return res.refill;
-  throw new Error((res && res.error) ? String(res.error) : 'refill refused');
+  // success: { refill: "1" }   failure: { error: "..." } or { refill: { error: "..." } }
+  if (res && !res.error && res.refill !== undefined && res.refill !== null && typeof res.refill !== 'object') return String(res.refill);
+  const reason = res && (res.error || (res.refill && res.refill.error));
+  throw new Error(reason ? String(reason) : 'refill refused');
+}
+
+// status of a refill created earlier: "Completed", "Rejected", "Pending", ...
+async function refillStatus(provider, refillId) {
+  const res = await call(provider, { action: 'refill_status', refill: String(refillId) });
+  const st = res && res.status;
+  if (typeof st === 'string') return st;
+  throw new Error(st && st.error ? String(st.error) : 'refill status unavailable');
 }
 
 async function getBalance(provider) {
@@ -203,5 +215,5 @@ async function getBalance(provider) {
 }
 
 module.exports = {
-  CONFIG, listServices, fetchServiceInfo, calcSaleCost, calcBaseCost, placeOrder, orderStatus, orderStatusBulk, cancelOrder, refillOrder, getBalance, formatDuration
+  CONFIG, listServices, fetchServiceInfo, calcSaleCost, calcBaseCost, placeOrder, orderStatus, orderStatusBulk, cancelOrder, refillOrder, refillStatus, getBalance, formatDuration
 };

@@ -7,6 +7,7 @@ const providers = require('./providers');
 const texts = require('./texts');
 const mountAdminPanel = require('./admin');
 const retention = require('./retention');
+const ai = require('./ai');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -747,6 +748,8 @@ bot.on('text', async (ctx, next) => {
       min: s.newServiceInfo.min,
       max: s.newServiceInfo.max,
       avgTime: s.newServiceInfo.avgTime,
+      refill: s.newServiceInfo.refill,
+      cancel: s.newServiceInfo.cancel,
       lastSynced: new Date()
     });
     resetState(ctx.from.id);
@@ -756,8 +759,33 @@ bot.on('text', async (ctx, next) => {
     return;
   }
 
+  // free text while the customer is not inside a menu step -> AI assistant
+  if (s.level === 'root' && await aiReply(ctx, text)) return;
   return next();
 });
+
+// =======================================================================
+// AI chat: any free text that is not part of a menu step is answered by the
+// assistant (keys + prompt + daily limit are managed in Panel > AI Bot).
+// =======================================================================
+let aiAlertAt = 0;
+async function aiReply(ctx, text) {
+  if (!ai.enabled() || !(await ai.hasKeys())) return false; // not configured -> stay silent like before
+  if (bot.telegram.sendChatAction) bot.telegram.sendChatAction(ctx.chat.id, 'typing').catch(() => {});
+  const res = await ai.chat({
+    userId: String(ctx.from.id), name: displayName(ctx.from), balance: ctx.dbUser ? ctx.dbUser.balance : null, text: text.slice(0, 1000)
+  });
+  if (res.ok) { await ctx.reply(res.text.slice(0, 4000)); return true; }
+  if (res.reason === 'limit') { await ctx.reply(texts.t('ai_limit_msg')); return true; }
+  console.error('AI reply failed:', res.reason);
+  await ctx.reply(texts.t('ai_fallback'));
+  // tell the admins (at most once an hour) so empty / broken keys get fixed
+  if (Date.now() - aiAlertAt > 3600 * 1000) {
+    aiAlertAt = Date.now();
+    for (const id of ADMIN_IDS) await safeSend(id, `⚠️ AI Bot မဖြေနိုင်ပါ (${res.reason}): ${res.detail || ''}\nPanel > AI Bot မှာ API key / model ကို စစ်ပါ။`);
+  }
+  return true;
+}
 
 // =======================================================================
 // Top-up flow
@@ -1047,6 +1075,11 @@ async function refreshOrderStatuses(orders) {
         if (info.status) o.status = info.status;
         if (info.start_count !== undefined) o.startCount = Number(info.start_count);
         if (info.remains !== undefined) o.remains = Number(info.remains);
+        // the provider reports what it really charged us - use it for exact profit numbers
+        if (info.charge !== undefined && Number.isFinite(Number(info.charge)) && (!info.currency || info.currency === 'USD')) {
+          const usd = Number(texts.t(o.provider + '_usd_to_mmk')) || 0;
+          if (usd > 0) o.baseCost = Math.ceil(Number(info.charge) * usd);
+        }
         o.updatedAt = new Date();
         await o.save();
 
@@ -1161,20 +1194,25 @@ bot.action(/^help_a_([0-9a-fA-F]{24})_(refill|speed|cancel)$/, async (ctx) => {
   const done = status === 'completed';
   const cancelled = ['canceled', 'cancelled'].includes(status) || order.refunded;
 
-  if (type === 'cancel') return requestCancel(ctx, order);
+  const svc = order.serviceId ? await Service.findById(order.serviceId).catch(() => null) : null;
+  if (type === 'cancel') {
+    if (svc && svc.cancel === false) return ctx.reply(texts.t('help_cancel_unsupported'));
+    return requestCancel(ctx, order);
+  }
   if (cancelled) return ctx.reply(texts.t('help_cancelled'));
   if (type === 'speed' && (done || status === 'partial')) return ctx.reply(texts.t('help_speed_done'));
+  if (type === 'refill' && svc && svc.refill === false) return ctx.reply(texts.t('help_refill_unsupported'));
   if (type === 'refill' && !done) return ctx.reply(texts.t('help_refill_not_done'));
 
   // same request for the same order only once per 24h (stops button spamming)
   const since = new Date(Date.now() - 24 * 3600 * 1000);
   if (await HelpRequest.findOne({ orderId: String(order._id), type, createdAt: { $gte: since } })) return ctx.reply(texts.t('help_cooldown'));
 
-  let auto = false, result = '';
+  let auto = false, result = '', refillId;
   if (type === 'refill') {
     try {
       const id = await providers.refillOrder(order.provider, order.providerOrderId);
-      auto = true; result = `provider refill #${id} ပို့ပြီး`;
+      auto = true; refillId = String(id); result = `provider refill #${id} ပို့ပြီး`;
     } catch (err) {
       logFailure('customer refill request failed', err);
       result = 'API refill မရ - manual ဆောင်ရွက်ရန်';
@@ -1182,13 +1220,38 @@ bot.action(/^help_a_([0-9a-fA-F]{24})_(refill|speed|cancel)$/, async (ctx) => {
   } else { result = 'Speed-up: provider support ထံ manual တောင်းဆိုရန်'; }
 
   const hr = await HelpRequest.create({
-    orderId: String(order._id), orderNo: order.orderNo, userId: order.userId, type, auto, result,
+    orderId: String(order._id), orderNo: order.orderNo, userId: order.userId, type, auto, result, refillId,
     provider: order.provider, providerOrderId: order.providerOrderId
   });
   await ctx.reply(auto ? texts.t('help_refill_ok') : texts.t('help_manual'), await mainMenuKeyboard());
   const user = await User.findById(order.userId);
   await notifyAdminsHelp(hr, order, user || { _id: order.userId });
 });
+
+// follows every refill sent through the API: when the provider reports it
+// Completed / Rejected the customer is told automatically
+async function refillSweep() {
+  try {
+    const open = await HelpRequest.find({ type: 'refill', status: 'open', auto: true, refillId: { $exists: true } }).limit(50);
+    for (const hr of open) {
+      try {
+        const st = String(await providers.refillStatus(hr.provider, hr.refillId)).toLowerCase();
+        if (st === 'completed') {
+          const done = await HelpRequest.findOneAndUpdate({ _id: hr._id, status: 'open' }, { status: 'done', doneAt: new Date(), result: 'provider refill Completed' }, { new: true });
+          if (done) await safeSend(hr.userId, texts.t('help_refill_completed', { orderNo: hr.orderNo || '' }));
+        } else if (['rejected', 'canceled', 'cancelled', 'error', 'failed'].includes(st)) {
+          const upd = await HelpRequest.findOneAndUpdate({ _id: hr._id, auto: true }, { auto: false, result: `provider refill ${st} - manual လိုအပ်` }, { new: true });
+          if (upd) {
+            await safeSend(hr.userId, texts.t('help_refill_rejected', { orderNo: hr.orderNo || '' }));
+            for (const id of ADMIN_IDS) await safeSend(id, `⚠️ Refill ${st}: Order ${hr.orderNo} (${hr.provider} ${hr.providerOrderId}) - Panel > Help Orders မှာ manual စစ်ပါ။`);
+          }
+        }
+      } catch (err) { logFailure('refill status check failed', err); }
+      await delay(300);
+    }
+  } catch (err) { console.error('refillSweep error:', err.message); }
+}
+setInterval(() => { refillSweep(); }, 10 * 60 * 1000);
 
 bot.action(/^help_done_([0-9a-fA-F]{24})$/, async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.answerCbQuery('Admin only', { show_alert: true });
@@ -1408,7 +1471,7 @@ async function addServiceQuick(platformKey, categoryLabel, buttonLabel, provider
   const service = await Service.create({
     categoryId: category._id, label, provider, providerServiceId,
     providerName: info.providerName, rate: info.rate, min: info.min, max: info.max,
-    avgTime: info.avgTime, lastSynced: new Date()
+    avgTime: info.avgTime, refill: info.refill, cancel: info.cancel, lastSynced: new Date()
   });
   return { platform, category, service };
 }
@@ -1550,7 +1613,7 @@ bot.command('syncservices', async (ctx) => {
     try {
       const info = await providers.fetchServiceInfo(svc.provider, svc.providerServiceId);
       svc.rate = info.rate; svc.min = info.min; svc.max = info.max;
-      svc.avgTime = info.avgTime; svc.lastSynced = new Date();
+      svc.avgTime = info.avgTime; svc.refill = info.refill; svc.cancel = info.cancel; svc.lastSynced = new Date();
       await svc.save(); ok++;
     } catch (err) { fail++; }
   }
