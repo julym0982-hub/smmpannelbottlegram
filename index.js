@@ -1311,6 +1311,13 @@ bot.command('adminlogin', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   if (!ctx.chat || ctx.chat.type !== 'private') return; // never post a login link into a group
   if (!panel) return ctx.reply('⚠️ Admin panel မစတင်သေးပါ။');
+  if (!panel.linkLoginEnabled) {
+    // link login switched off (PANEL_LINK_LOGIN=off): only username + password works
+    const page = panel.loginPageUrl && panel.loginPageUrl();
+    return ctx.reply(panel.passwordLoginEnabled && page
+      ? `🔐 Admin Panel ကို Username / Password နဲ့ ဝင်ပါ။\n\n${page}`
+      : '⚠️ Link login ကို ပိတ်ထားပါတယ်။ Render Environment ထဲမှာ PANEL_USERNAME နဲ့ PANEL_PASSWORD (၁၀ လုံးအထက်) ထည့်ပါ။');
+  }
   const url = panel.createLoginUrl(ctx.from.id);
   if (!url) {
     return ctx.reply('⚠️ Panel URL မသတ်မှတ်ရသေးပါ။ Render ရဲ့ Environment ထဲမှာ PANEL_URL=https://your-app.onrender.com ထည့်ပေးပါ။');

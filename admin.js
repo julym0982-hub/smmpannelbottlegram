@@ -24,7 +24,8 @@ const PANEL_PASS = String(process.env.PANEL_PASSWORD || '');
 const PASSWORD_LOGIN = !!(PANEL_USER && PANEL_PASS.length >= 10);
 if (PANEL_USER && PANEL_PASS && !PASSWORD_LOGIN) console.error('PANEL_PASSWORD is shorter than 10 characters -> password login DISABLED. Use a longer password.');
 // Telegram one-time link login stays available unless PANEL_LINK_LOGIN=off
-const LINK_LOGIN = String(process.env.PANEL_LINK_LOGIN || 'on').toLowerCase() !== 'off';
+const LINK_LOGIN = !['off', 'false', '0', 'no'].includes(String(process.env.PANEL_LINK_LOGIN || 'on').trim().replace(/^["']|["']$/g, '').toLowerCase());
+console.log(`Admin panel login -> password: ${PASSWORD_LOGIN ? 'ON' : 'OFF'}, telegram link: ${LINK_LOGIN ? 'ON' : 'OFF'}`);
 const sha = (x) => crypto.createHash('sha256').update(String(x)).digest();
 const LOCK_AFTER = 5, LOCK_MS = 15 * 60 * 1000;
 const SESSION_TTL = 12 * 60 * 60 * 1000;  // 12 hours
@@ -44,8 +45,8 @@ function safeEqual(a, b) {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
-function makeSession(adminId) {
-  const body = b64(JSON.stringify({ id: String(adminId), exp: Date.now() + SESSION_TTL }));
+function makeSession(adminId, via) {
+  const body = b64(JSON.stringify({ id: String(adminId), via: via || 'link', exp: Date.now() + SESSION_TTL }));
   return `${body}.${sign(body)}`;
 }
 function readSession(value) {
@@ -178,7 +179,7 @@ module.exports = function mountAdminPanel(app, deps) {
     if (arr.length > 10) throw fail(429, 'ကြိုးစားမှု များလွန်းနေသည်။ ခဏနေမှ ပြန်စမ်းပါ။');
     const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
     const giveSession = async (adminId, how) => {
-      res.cookie(COOKIE, makeSession(adminId), { httpOnly: true, sameSite: 'strict', secure, path: '/admin', maxAge: SESSION_TTL });
+      res.cookie(COOKIE, makeSession(adminId, how === 'password' ? 'password' : 'link'), { httpOnly: true, sameSite: 'strict', secure, path: '/admin', maxAge: SESSION_TTL });
       await AdminLog.create({ admin: adminId, action: 'login', detail: `${how} ip ${ip}` }).catch(() => {});
       res.json({ ok: true });
     };
@@ -226,6 +227,8 @@ module.exports = function mountAdminPanel(app, deps) {
   // ---- everything below needs a valid session ------------------------------
   api.use((req, res, next) => {
     const sess = readSession(parseCookies(req.headers.cookie)[COOKIE]);
+    // when the Telegram link is switched off, every session that was NOT created by password login (incl. old cookies) is rejected
+    if (sess && !LINK_LOGIN && sess.via !== 'password') return res.status(401).json({ error: 'unauthorized', message: 'Login လိုအပ်ပါသည်' });
     if (!sess || !isAdmin(sess.id)) return res.status(401).json({ error: 'unauthorized', message: 'Login လိုအပ်ပါသည်' });
     req.adminId = sess.id;
     next();
@@ -1076,5 +1079,5 @@ module.exports = function mountAdminPanel(app, deps) {
   router.use('/api', api);
   app.use('/admin', router);
 
-  return { createLoginUrl };
+  return { createLoginUrl, linkLoginEnabled: LINK_LOGIN, passwordLoginEnabled: PASSWORD_LOGIN, loginPageUrl: () => (baseUrl() ? baseUrl() + '/admin' : null) };
 };
