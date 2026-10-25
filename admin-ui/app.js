@@ -50,6 +50,7 @@
     mega: '<path d="M3 11v2a1 1 0 001 1h3l8 4V6L7 10H4a1 1 0 00-1 1zM19 8.5a5 5 0 010 7"/>',
     gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 01-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 010-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 014 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 010 4h-.1a1.7 1.7 0 00-1.5 1z"/>',
     log: '<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
+    bot: '<rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/><circle cx="12" cy="3.5" r="1"/>',
     bell: '<path d="M6 9a6 6 0 0112 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9zM10 20a2 2 0 004 0"/>',
     out: '<path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>'
   };
@@ -195,13 +196,14 @@
     { id: 'services', label: 'Services', icon: 'box' }
   ];
   const MORE = [
+    { id: 'ai', label: 'AI Bot', icon: 'bot' },
     { id: 'help', label: 'Help Orders', icon: 'help' },
     { id: 'coupons', label: 'Coupon', icon: 'gift' },
     { id: 'broadcast', label: 'Broadcast', icon: 'mega' },
     { id: 'settings', label: 'Settings', icon: 'gear' },
     { id: 'logs', label: 'Activity Log', icon: 'log' }
   ];
-  const PAGES = { dashboard: pageDashboard, deposits: pageDeposits, orders: pageOrders, users: pageUsers, services: pageServices, help: pageHelp, coupons: pageCoupons, broadcast: pageBroadcast, settings: pageSettings, logs: pageLogs };
+  const PAGES = { dashboard: pageDashboard, deposits: pageDeposits, orders: pageOrders, users: pageUsers, services: pageServices, help: pageHelp, ai: pageAI, coupons: pageCoupons, broadcast: pageBroadcast, settings: pageSettings, logs: pageLogs };
 
   function routeId() { const r = (location.hash || '#dashboard').slice(1).split('?')[0]; return PAGES[r] ? r : 'dashboard'; }
   function clearTimers() { state.timers.forEach(clearInterval); state.timers = []; }
@@ -783,6 +785,120 @@
     const shortLink = (l) => (l.length > 38 ? l.slice(0, 38) + '…' : l);
     load();
     every(20000, load);
+  }
+
+
+  // ==================================================================
+  // PAGE: AI Bot
+  // ==================================================================
+  async function pageAI(view) {
+    let d;
+    try { d = await GET('/ai'); } catch (e) { return fail(e); }
+    const S = d.settings;
+    const sw = (checked) => h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked }), h('i'));
+    const saveS = async (values) => { await POST('/ai/settings', { values }); toast('သိမ်းပြီး ✅', 'ok'); };
+
+    // --- on/off + limit
+    const onSw = sw(S.ai_enabled !== '0'), limSw = sw(S.ai_limit_enabled !== '0');
+    const limN = h('input', { type: 'number', min: 1, value: S.ai_limit_per_day, inputmode: 'numeric' });
+    const stats = h('div', { class: 'small muted' }, `ဒီနေ့ AI ကို မေးသူ ${fmt(d.stats.usersToday)} ယောက် · မေးခွန်း ${fmt(d.stats.questionsToday)} ခု`);
+    view.append(h('div', { class: 'card' }, h('h2', {}, '🤖 AI အကူ'),
+      h('div', { class: 'stack' },
+        h('label', { class: 'row nowrap' }, onSw, h('div', { class: 'grow' }, h('strong', {}, 'AI အကူ ဖွင့်မည်'), h('div', { class: 'muted small' }, 'Menu ခလုတ်မဟုတ်တဲ့ စာတွေ (မေးခွန်းတွေ) ကို AI က လူလို ပြန်ဖြေပေးမည်'))),
+        h('label', { class: 'row nowrap' }, limSw, h('div', { class: 'grow' }, h('strong', {}, 'နေ့စဉ် မေးခွန်း Limit သုံးမည်'), h('div', { class: 'muted small' }, 'ပိတ်ထားရင် အကန့်အသတ်မရှိ (API key quota ကုန်မှာ သတိထားပါ)'))),
+        h('label', { class: 'f' }, h('span', {}, 'User တစ်ယောက် တစ်ရက်လျှင် မေးခွင့် အကြိမ်ရေ'), limN),
+        stats,
+        h('button', { class: 'btn primary', onclick: (e) => busy(e.target, () => saveS({ ai_enabled: onSw.firstChild.checked ? '1' : '0', ai_limit_enabled: limSw.firstChild.checked ? '1' : '0', ai_limit_per_day: limN.value })) }, 'သိမ်းမည်'))));
+    view.append(h('div', { style: 'height:12px' }));
+
+    // --- keys
+    const keysBox = h('div', { class: 'card' });
+    view.append(keysBox, h('div', { style: 'height:12px' }));
+    const statusPill = (k) => k.status === 'active' ? h('span', { class: 'pill ok' }, 'Active') : k.status === 'limit' ? h('span', { class: 'pill warn' }, 'Limit ပြည့်') : h('span', { class: 'pill' }, 'ပိတ်ထား');
+    function drawKeys() {
+      keysBox.replaceChildren(
+        h('div', { class: 'row nowrap' }, h('h2', { class: 'grow', style: 'margin:0' }, '🔑 API Keys'), h('button', { class: 'btn primary sm', onclick: () => keyForm() }, '➕ Add API Key')),
+        h('div', { class: 'muted small', style: 'margin:6px 0 10px' }, 'Key တွေကို encrypt လုပ်ပြီးသိမ်းပါတယ်၊ ဒီစာမျက်နှာမှာတောင် အပြည့်ပြန်မပြပါ။ Key တစ်ခု limit ပြည့်ရင် နောက် key တစ်ခုကို user မသိအောင် အလိုအလျောက် ပြောင်းသုံးပါမယ်။'),
+        d.keys.length ? h('div', { class: 'list' }, d.keys.map(k => h('div', { class: 'item' },
+          h('div', { class: 'row nowrap' },
+            h('div', { class: 'grow' }, h('strong', {}, k.provider === 'gemini' ? 'Gemini' : 'Groq'), ' ', h('span', { class: 'mono muted' }, k.masked), k.label ? h('span', { class: 'muted' }, ' · ' + k.label) : null),
+            statusPill(k)),
+          h('div', { class: 'small muted' }, `ဒီနေ့ ${fmt(k.today)} ကြိမ် · စုစုပေါင်း ${fmt(k.total)}` + (k.status === 'limit' && k.until ? ` · ${new Date(k.until).toLocaleTimeString()} ထိ နားမည်` : '')),
+          k.lastError ? h('div', { class: 'small', style: 'color:var(--bad)' }, 'Error: ' + k.lastError) : null,
+          h('div', { class: 'row', style: 'margin-top:6px' },
+            h('button', { class: 'btn sm', onclick: (e) => busy(e.target, async () => { const r = await POST(`/ai/keys/${k.id}/test`); r.ok ? toast('အလုပ်လုပ်သည် ✅ ' + r.reply, 'ok') : toast('မရပါ: ' + r.error, 'err'); reload(); }) }, '🧪 Test'),
+            k.status === 'limit' ? h('button', { class: 'btn sm', onclick: (e) => busy(e.target, async () => { await POST(`/ai/keys/${k.id}/reset`); reload(); }) }, '♻️ Reset') : null,
+            h('button', { class: 'btn sm', onclick: () => keyForm(k) }, '✏️ Edit'),
+            h('button', { class: 'btn sm danger', onclick: async () => { if (await confirmBox('Key ဖျက်မည်', `${k.provider} ${k.masked} ကို ဖျက်မှာ သေချာပါသလား?`, 'ဖျက်မည်', true)) { try { await DEL('/ai/keys/' + k.id); reload(); } catch (e) { fail(e); } } } }, '🗑️ Remove'))))) : empty('API key မရှိသေးပါ — Add API Key နှိပ်ပါ'));
+    }
+    async function reload() { try { d = await GET('/ai'); drawKeys(); } catch (e) { fail(e); } }
+    function keyForm(k) {
+      const prov = h('select', {}, h('option', { value: 'gemini' }, 'Gemini'), h('option', { value: 'groq' }, 'Groq'));
+      if (k) { prov.value = k.provider; prov.disabled = true; }
+      const key = h('input', { type: 'text', placeholder: k ? 'Key အသစ်ထည့်မှ ပြောင်းမည် (မထည့်ရင် မပြောင်း)' : 'API Key ကို ဒီမှာ paste လုပ်ပါ', autocomplete: 'off', spellcheck: false });
+      const label = h('input', { type: 'text', placeholder: 'နာမည်ပေးချင်ရင် (မထည့်လည်းရ)', maxlength: 40, value: k ? k.label : '' });
+      const act = k ? sw(k.isActive) : null;
+      const m = modal(k ? 'Key ပြင်မည်' : 'API Key ထည့်မည်', h('div', { class: 'stack' },
+        field('Provider', prov), field('API Key', key), field('Label', label),
+        act ? h('label', { class: 'row nowrap' }, act, h('span', {}, 'ဒီ key ကို သုံးမည်')) : null,
+        h('div', { class: 'row', style: 'justify-content:flex-end' },
+          h('button', { class: 'btn', onclick: () => m.close() }, 'မလုပ်တော့ပါ'),
+          h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
+            if (k) await PATCH('/ai/keys/' + k.id, { label: label.value, isActive: act.firstChild.checked, key: key.value.trim() || undefined });
+            else await POST('/ai/keys', { provider: prov.value, key: key.value, label: label.value });
+            toast('သိမ်းပြီး ✅', 'ok'); m.close(); reload();
+          }) }, 'Save'))));
+    }
+    drawKeys();
+
+    // --- model + tuning
+    const mG = h('input', { type: 'text', value: S.ai_model_gemini, spellcheck: false });
+    const mQ = h('input', { type: 'text', value: S.ai_model_groq, spellcheck: false });
+    const temp = h('input', { type: 'number', step: '0.1', min: 0, max: 2, value: S.ai_temperature, inputmode: 'decimal' });
+    const mt = h('input', { type: 'number', min: 64, max: 8192, value: S.ai_max_tokens, inputmode: 'numeric' });
+    const mem = h('input', { type: 'number', min: 0, max: 20, value: S.ai_history_turns, inputmode: 'numeric' });
+    view.append(h('div', { class: 'card' }, h('h2', {}, '⚙️ Model & ပုံစံ'), h('div', { class: 'stack' },
+      field('Gemini model ID (3.x သို့မဟုတ် အသစ်ဆုံး ID အတိအကျ ထည့်ပါ)', mG),
+      field('Groq model ID', mQ),
+      field('Temperature (0–2၊ များရင် ပိုလူဆန်/ပိုကွဲ)', temp),
+      field('အဖြေ အရှည်ဆုံး (tokens)', mt),
+      field('ယခင်စကားပြောကို ဘယ်နှခွန်း မှတ်ထားမလဲ (0–20)', mem),
+      h('button', { class: 'btn primary', onclick: (e) => busy(e.target, () => saveS({ ai_model_gemini: mG.value, ai_model_groq: mQ.value, ai_temperature: temp.value, ai_max_tokens: mt.value, ai_history_turns: mem.value })) }, 'သိမ်းမည်'))));
+    view.append(h('div', { style: 'height:12px' }));
+
+    // --- prompt & messages
+    const sp = h('textarea', { style: 'min-height:320px', value: S.ai_system_prompt });
+    const kn = h('textarea', { style: 'min-height:140px', placeholder: 'ဆိုင်အကြောင်း အချက်အလက်များ (ဈေးနှုန်း၊ ငွေလွှဲပုံစံ၊ အချိန်၊ ပေးပို့ပုံ စသဖြင့်) — AI က ဒီအချက်တွေကို သိပြီး ဖြေမည်', value: S.ai_knowledge });
+    const lm = h('textarea', { value: S.ai_limit_msg });
+    const fb = h('textarea', { value: S.ai_fallback });
+    const resetBtn = (key, ta) => h('button', { class: 'btn sm', onclick: async (e) => { if (await confirmBox('မူလအတိုင်း ပြန်ထားမည်', 'ပြင်ထားတာတွေ ပျောက်မယ်။ သေချာပါသလား?', 'ပြန်ထားမည်')) busy(e.target, async () => { const r = await POST('/ai/settings/reset', { key }); ta.value = r.value; toast('မူလအတိုင်း ပြန်ထားပြီး', 'ok'); }); } }, '↩️ မူလအတိုင်း');
+    view.append(h('div', { class: 'card' }, h('h2', {}, '🧠 AI ကို ပေးထားတဲ့ ညွှန်ကြားချက် (System Prompt)'),
+      h('div', { class: 'muted small', style: 'margin-bottom:8px' }, 'AI ဘယ်လိုစကားပြောရမလဲ၊ ဘာတွေ မလုပ်ရဘူးလဲ ဒီမှာ ပြင်ပါ။ ${name} = customer နာမည်၊ ${balance} = လက်ကျန်ငွေ ပေါ်လာမည်။'),
+      h('div', { class: 'stack' }, sp, h('div', { class: 'row' }, resetBtn('ai_system_prompt', sp)),
+        h('label', { class: 'f' }, h('span', {}, '📚 ဆိုင်အကြောင်း အချက်အလက် (Knowledge)'), kn),
+        h('label', { class: 'f' }, h('span', {}, 'Limit ပြည့်သွားရင် ပြမည့်စာ'), lm, resetBtn('ai_limit_msg', lm)),
+        h('label', { class: 'f' }, h('span', {}, 'AI အလုပ်မလုပ်တော့ရင် (key အကုန်ကုန်/error) ပြမည့်စာ'), fb, resetBtn('ai_fallback', fb)),
+        h('button', { class: 'btn primary', onclick: (e) => busy(e.target, () => saveS({ ai_system_prompt: sp.value, ai_knowledge: kn.value, ai_limit_msg: lm.value, ai_fallback: fb.value })) }, 'သိမ်းမည်'))));
+    view.append(h('div', { style: 'height:12px' }));
+
+    // --- test chat
+    const log = h('div', { class: 'stack', style: 'min-height:60px;margin-bottom:8px' });
+    const msg = h('input', { type: 'text', placeholder: 'customer လို မေးကြည့်ပါ...', maxlength: 500 });
+    const hist = [];
+    const bubble = (who, t, err) => h('div', { class: 'item', style: `${who === 'user' ? 'margin-left:24px' : 'margin-right:24px'};${err ? 'color:var(--bad)' : ''}`, 'data-who': who }, t);
+    async function send(btn) {
+      const t = msg.value.trim(); if (!t) return;
+      msg.value = ''; log.appendChild(bubble('user', t));
+      await busy(btn, async () => {
+        const r = await POST('/ai/test', { message: t, history: hist.slice() });
+        if (r.ok) { hist.push({ role: 'user', text: t }, { role: 'assistant', text: r.reply }); log.appendChild(bubble('bot', r.reply)); }
+        else log.appendChild(bubble('bot', 'မရပါ: ' + r.error, true));
+        reload();
+      });
+    }
+    const sendBtn = h('button', { class: 'btn primary', onclick: (e) => send(e.target) }, 'ပို့');
+    msg.addEventListener('keydown', e => { if (e.key === 'Enter') send(sendBtn); });
+    view.append(h('div', { class: 'card' }, h('h2', {}, '💬 စမ်းပြောကြည့်ရန်'), h('div', { class: 'muted small', style: 'margin-bottom:8px' }, 'သိမ်းထားပြီးသား prompt နဲ့ key တွေကို သုံးပြီး customer မေးသလို စမ်းမေးနိုင်ပါတယ် (နေ့စဉ် limit မပါပါ)။'), log, h('div', { class: 'row nowrap' }, h('div', { class: 'grow' }, msg), sendBtn)));
   }
 
   // ==================================================================
