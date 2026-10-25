@@ -882,7 +882,7 @@
 
     // --- prompt & messages
     const sp = h('textarea', { style: 'min-height:320px', value: S.ai_system_prompt });
-    const kn = h('textarea', { style: 'min-height:140px', placeholder: 'ဆိုင်အကြောင်း အချက်အလက်များ (ဈေးနှုန်း၊ ငွေလွှဲပုံစံ၊ အချိန်၊ ပေးပို့ပုံ စသဖြင့်) — AI က ဒီအချက်တွေကို သိပြီး ဖြေမည်', value: S.ai_knowledge });
+    const kn = h('textarea', { style: 'min-height:140px', placeholder: 'ဥပမာ -\nဆိုင်အမည်: ...\nAdmin ဆက်သွယ်ရန်: @username\nAdmin အလုပ်ချိန်: မနက် ၉ နာရီ - ည ၁၀ နာရီ\nငွေဖြည့်ကြာချိန်: ၅-၁၅ မိနစ်ခန့်\nRefill: ရက် ၃၀ အာမခံ (Refill ပါတဲ့ service များသာ)\nဈေးအကြမ်းဖျင်း: TikTok follower ၁၀၀၀ = ... ကျပ်\n\n(KPay/Wave နံပါတ်၊ အနည်းဆုံးငွေဖြည့်ပမာဏ၊ Contact Admin ခလုတ်ကို bot က အလိုအလျောက် သိပြီးသားမို့ ထပ်မရေးလည်းရ)', value: S.ai_knowledge });
     const lm = h('textarea', { value: S.ai_limit_msg });
     const fb = h('textarea', { value: S.ai_fallback });
     const resetBtn = (key, ta) => h('button', { class: 'btn sm', onclick: async (e) => { if (await confirmBox('မူလအတိုင်း ပြန်ထားမည်', 'ပြင်ထားတာတွေ ပျောက်မယ်။ သေချာပါသလား?', 'ပြန်ထားမည်')) busy(e.target, async () => { const r = await POST('/ai/settings/reset', { key }); ta.value = r.value; toast('မူလအတိုင်း ပြန်ထားပြီး', 'ok'); }); } }, '↩️ မူလအတိုင်း');
