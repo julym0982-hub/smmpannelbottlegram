@@ -156,14 +156,44 @@ function remember(userId, user, assistant) {
 function buildSystem(vars) {
   const base = texts.t('ai_system_prompt', vars);
   const extra = texts.t('ai_knowledge', vars).trim();
-  return extra ? `${base}\n\nဆိုင်အကြောင်း အချက်အလက်များ (ဒါတွေကို အခြေခံပြီး ဖြေပါ):\n${extra}` : base;
+  // facts the bot already knows itself - filled in automatically so the shop owner never has to type them
+  const minTopup = texts.t('topup_min_amount');
+  const auto = minTopup ? `အနည်းဆုံး ငွေဖြည့်ပမာဏ: ${minTopup} ကျပ်` : '';
+  const facts = [auto, extra].filter(Boolean).join('\n');
+  return facts ? `${base}\n\nဆိုင်အကြောင်း အချက်အလက်များ (ဒါတွေကို အခြေခံပြီး ဖြေပါ):\n${facts}` : base;
+}
+
+// ---- security: customer-controlled text must never steer or leak the assistant ----
+// a Telegram first name goes INTO the system prompt, so it is stripped down to harmless characters
+function safeName(n) {
+  const cleaned = String(n || '').replace(/[\u0000-\u001f\u007f"'`$\\{}<>\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 30);
+  return cleaned || 'ဖောက်သည်';
+}
+// obvious prompt-extraction / panel-attack attempts get a fixed polite reply without calling the AI at all
+const ATTACK_RE = /(system\s*prompt|initial\s*prompt|ignore\s+(all\s+|the\s+)?(previous|above|prior)|disregard\s+(all\s+)?(previous|above)|developer\s*mode|jailbreak|\bDAN\b|reveal\s+(your|the)\s+(prompt|instructions)|admin\s*panel|adminlogin|PANEL_PASSWORD|BOT_TOKEN|api[\s_-]*key|prompt\s*(ကို|ပြ|ပေး)|ညွှန်ကြားချက်\s*(တွေ|များ)?\s*(ကို)?\s*(ပြ|မေ့|ကူးပေး))/i;
+const BLOCKED_REPLY = 'အဲဒါလေးတွေတော့ ပြောပြလို့ မရပါဘူးရှင့် 🙏 service ဝယ်တာ၊ ငွေဖြည့်တာ၊ order ကိစ္စတွေဆို ကူညီပေးပါ့မယ်နော်။';
+function secretValues() {
+  const names = ['BOT_TOKEN', 'MONGODB_URI', 'PANEL_PASSWORD', 'PANEL_SESSION_SECRET', 'AI_KEY_SECRET', 'SHWEBOOST_API_KEY', 'HIROSHI_API_KEY', 'SECSERS_API_KEY'];
+  return names.map(n => process.env[n]).filter(v => v && String(v).length >= 8).map(String);
+}
+const SECRET_PATTERNS = [/AIza[0-9A-Za-z_\-]{20,}/, /gsk_[A-Za-z0-9]{20,}/, /\b\d{8,10}:[A-Za-z0-9_\-]{30,}\b/, /mongodb(\+srv)?:\/\//i, /\/admin\/login\?token=/i];
+// true when the model's answer would leak a secret or a long piece of the system prompt
+function leaks(out, system) {
+  if (SECRET_PATTERNS.some(re => re.test(out))) return true;
+  if (secretValues().some(v => out.includes(v))) return true;
+  const sys = String(system).replace(/\s+/g, ' '), o = String(out).replace(/\s+/g, ' ');
+  for (let i = 0; i + 40 <= sys.length; i += 20) if (o.includes(sys.slice(i, i + 40))) return true;
+  return false;
 }
 
 // full customer chat turn: limit -> prompt -> AI (with failover) -> memory
 async function chat({ userId, name, balance, text }) {
+  if (ATTACK_RE.test(text)) { console.error(`AI guard: blocked suspicious message from ${userId}`); return { ok: true, text: BLOCKED_REPLY }; }
   const lim = await takeQuestion(userId);
   if (!lim.allowed) return { ok: false, reason: 'limit' };
-  const res = await ask({ system: buildSystem({ name: name || 'ဖောက်သည်', balance: balance == null ? '' : balance }), history: getHistory(userId), text });
+  const system = buildSystem({ name: safeName(name), balance: balance == null ? '' : balance });
+  const res = await ask({ system, history: getHistory(userId), text });
+  if (res.ok && leaks(res.text, system)) { console.error(`AI guard: blocked a leaking reply to ${userId}`); res.text = BLOCKED_REPLY; }
   if (res.ok) remember(userId, text, res.text);
   // the AI never answered (all keys down) - do not charge the customer a question
   else if (lim.used) await AiUsage.findOneAndUpdate({ _id: `${userId}:${today()}` }, { $inc: { count: -1 } });

@@ -17,6 +17,16 @@ const providers = require('./providers');
 const texts = require('./texts');
 
 const COOKIE = 'smm_admin';
+
+// ---- username + password login (set PANEL_USERNAME / PANEL_PASSWORD in the environment) ----
+const PANEL_USER = String(process.env.PANEL_USERNAME || '').trim();
+const PANEL_PASS = String(process.env.PANEL_PASSWORD || '');
+const PASSWORD_LOGIN = !!(PANEL_USER && PANEL_PASS.length >= 10);
+if (PANEL_USER && PANEL_PASS && !PASSWORD_LOGIN) console.error('PANEL_PASSWORD is shorter than 10 characters -> password login DISABLED. Use a longer password.');
+// Telegram one-time link login stays available unless PANEL_LINK_LOGIN=off
+const LINK_LOGIN = String(process.env.PANEL_LINK_LOGIN || 'on').toLowerCase() !== 'off';
+const sha = (x) => crypto.createHash('sha256').update(String(x)).digest();
+const LOCK_AFTER = 5, LOCK_MS = 15 * 60 * 1000;
 const SESSION_TTL = 12 * 60 * 60 * 1000;  // 12 hours
 const LOGIN_TTL = 5 * 60 * 1000;          // login link lives 5 minutes, single use
 const PAGE = 20;
@@ -107,6 +117,7 @@ module.exports = function mountAdminPanel(app, deps) {
   const loginAttempts = new Map(); // ip -> [timestamps]
 
   function createLoginUrl(adminId) {
+    if (!LINK_LOGIN) return null;
     const base = baseUrl();
     if (!base) return null;
     for (const [t, v] of loginTokens) if (v.exp < Date.now() || v.adminId === String(adminId)) loginTokens.delete(t);
@@ -157,24 +168,54 @@ module.exports = function mountAdminPanel(app, deps) {
     next();
   });
 
+  const failedLogins = new Map(); // ip -> { n, until }
+  api.get('/login-info', (req, res) => res.json({ password: PASSWORD_LOGIN, link: LINK_LOGIN }));
+
   api.post('/login', wrap(async (req, res) => {
     const ip = req.ip || 'x';
     const arr = (loginAttempts.get(ip) || []).filter(t => Date.now() - t < 60000);
     arr.push(Date.now()); loginAttempts.set(ip, arr);
     if (arr.length > 10) throw fail(429, 'ကြိုးစားမှု များလွန်းနေသည်။ ခဏနေမှ ပြန်စမ်းပါ။');
+    const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    const giveSession = async (adminId, how) => {
+      res.cookie(COOKIE, makeSession(adminId), { httpOnly: true, sameSite: 'strict', secure, path: '/admin', maxAge: SESSION_TTL });
+      await AdminLog.create({ admin: adminId, action: 'login', detail: `${how} ip ${ip}` }).catch(() => {});
+      res.json({ ok: true });
+    };
 
+    // ---- username + password ----
+    if (typeof req.body.username === 'string' || typeof req.body.password === 'string') {
+      if (!PASSWORD_LOGIN) throw fail(403, 'Password login မဖွင့်ထားပါ (PANEL_USERNAME / PANEL_PASSWORD ၁၀ လုံးအထက် သတ်မှတ်ပါ)။');
+      const f = failedLogins.get(ip) || { n: 0, until: 0 };
+      if (f.until > Date.now()) throw fail(429, 'မှားများလွန်းလို့ ၁၅ မိနစ် ပိတ်ထားပါတယ်။ နောက်မှ ပြန်စမ်းပါ။');
+      const u = String(req.body.username || '').slice(0, 200), pw = String(req.body.password || '').slice(0, 200);
+      // both compared in constant time, always both evaluated
+      const okU = crypto.timingSafeEqual(sha(u), sha(PANEL_USER));
+      const okP = crypto.timingSafeEqual(sha(pw), sha(PANEL_PASS));
+      if (!(okU && okP)) {
+        f.n += 1;
+        if (f.n >= LOCK_AFTER) { f.until = Date.now() + LOCK_MS; f.n = 0; }
+        failedLogins.set(ip, f);
+        await new Promise(r => setTimeout(r, 800)); // slow guessing down
+        await AdminLog.create({ admin: 'unknown', action: 'login_failed', detail: `ip ${ip}` }).catch(() => {});
+        if (f.until > Date.now()) for (const id of (deps.adminIds || [])) safeSend(id, `⚠️ Admin Panel login မှားနေပါတယ် (ip ${ip}) - ၁၅ မိနစ် ပိတ်လိုက်ပါပြီ။ မိမိမဟုတ်ရင် PANEL_PASSWORD ပြောင်းပါ။`);
+        throw fail(401, 'Username သို့မဟုတ် Password မှားနေပါသည်။');
+      }
+      failedLogins.delete(ip);
+      const adminId = (deps.adminIds || [])[0];
+      if (!adminId) throw fail(500, 'ADMIN_IDS မသတ်မှတ်ရသေးပါ။');
+      return giveSession(adminId, 'password');
+    }
+
+    // ---- one-time Telegram link ----
+    if (!LINK_LOGIN) throw fail(403, 'Telegram link login ကို ပိတ်ထားပါတယ်။');
     const token = typeof req.body.token === 'string' ? req.body.token : '';
     const entry = loginTokens.get(token);
     loginTokens.delete(token); // single use, even when it fails below
     if (!entry || entry.exp < Date.now() || !isAdmin(entry.adminId)) {
       throw fail(401, 'Link သက်တမ်းကုန်သွားပါပြီ (သို့) သုံးပြီးသားပါ။ Bot ထဲမှာ /adminlogin ပြန်ပို့ပါ။');
     }
-    const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
-    res.cookie(COOKIE, makeSession(entry.adminId), {
-      httpOnly: true, sameSite: 'strict', secure, path: '/admin', maxAge: SESSION_TTL
-    });
-    await AdminLog.create({ admin: entry.adminId, action: 'login', detail: `ip ${ip}` }).catch(() => {});
-    res.json({ ok: true });
+    return giveSession(entry.adminId, 'telegram-link');
   }));
 
   api.post('/logout', (req, res) => {

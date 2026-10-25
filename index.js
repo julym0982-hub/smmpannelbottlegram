@@ -529,6 +529,12 @@ async function startLinkFlow(ctx, service, category) {
 // =======================================================================
 const MYANMAR_DIGITS = /[၀-၉]/;
 
+// every reply-keyboard button the bot shows (fixed ones + admin-added ones are
+// handled by the MenuButton lookup above). Used to keep the AI from answering them.
+function isMenuButtonText(t) {
+  return [BTN_SERVICES, BTN_BALANCE, BTN_TOPUP, BTN_HISTORY, BTN_COUPON, BTN_BACK, BTN_HELP].includes(t);
+}
+
 bot.on('text', async (ctx, next) => {
   const text = ctx.message.text.trim();
   const s = st(ctx.from.id);
@@ -758,6 +764,10 @@ bot.on('text', async (ctx, next) => {
     );
     return;
   }
+
+  // menu button presses must NEVER go to the AI - let the matching
+  // bot.hears(...) handler (some are registered further down) take them
+  if (isMenuButtonText(text)) return next();
 
   // free text while the customer is not inside a menu step -> AI assistant
   if (s.level === 'root' && await aiReply(ctx, text)) return;
