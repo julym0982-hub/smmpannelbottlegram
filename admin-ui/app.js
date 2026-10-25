@@ -200,7 +200,7 @@
     { id: 'ai', label: 'AI Bot', icon: 'bot' },
     { id: 'help', label: 'Help Orders', icon: 'help' },
     { id: 'coupons', label: 'Coupon', icon: 'gift' },
-    { id: 'broadcast', label: 'Broadcast', icon: 'mega' },
+    { id: 'broadcast', label: 'စာပို့ရန်', icon: 'mega' },
     { id: 'settings', label: 'Settings', icon: 'gear' },
     { id: 'logs', label: 'Activity Log', icon: 'log' }
   ];
@@ -257,18 +257,37 @@
     const msg = h('p', { class: 'muted' });
     const user = h('input', { type: 'text', placeholder: 'Username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false' });
     const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password' });
+    const code = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 8, spellcheck: 'false', 'aria-label': '2FA', style: 'text-align:center;letter-spacing:.35em;font-size:1.4rem' });
     const btn = h('button', { class: 'btn primary', style: 'width:100%' }, 'ဝင်မည်');
-    const code = h('input', { type: 'text', class: 'hide', placeholder: '2FA code (၆ လုံး)', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 8, spellcheck: 'false' });
-    const box = h('div', { class: 'hide' }, user, pass, code);
+    const box = h('div', { class: 'hide' }, user, pass);
     const card = h('div', { class: 'card' },
       h('div', { class: 'logo' }, icon('dash')),
       h('h1', {}, 'SMM Admin Panel'), msg, box, btn);
     app.appendChild(h('div', { class: 'login' }, card));
+    const grid = 'display:grid;gap:10px;margin:12px 0';
     const done = async () => { history.replaceState(null, '', BASE); await boot(); };
-    const pwLogin = async () => {
-      btn.disabled = true; msg.textContent = 'ဝင်နေပါသည်...';
-      try { await POST('/login', { username: user.value, password: pass.value, code: code.value }); pass.value = ''; code.value = ''; await done(); }
-      catch (e) { msg.textContent = e.message; btn.disabled = false; pass.value = ''; code.value = ''; }
+    let ticket = null;
+    const submit = async () => {
+      btn.disabled = true; msg.textContent = '';
+      try {
+        if (ticket) {
+          await POST('/login', { ticket, code: code.value }); code.value = ''; await done();
+        } else {
+          const r = await POST('/login', { username: user.value, password: pass.value });
+          pass.value = '';
+          if (r.step === '2fa') { // step 2: password was right -> ONLY the code box (nothing else on screen)
+            ticket = r.ticket;
+            box.replaceChildren(code); btn.disabled = false; code.focus();
+            code.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+            return;
+          }
+          await done();
+        }
+      } catch (e) {
+        msg.textContent = e.message; btn.disabled = false;
+        if (ticket) { code.value = ''; if (/ပြန်စပါ|အချိန်ကုန်/.test(e.message)) { ticket = null; box.replaceChildren(user, pass); user.focus(); } else code.focus(); }
+        else pass.value = '';
+      }
     };
     if (token) {
       msg.textContent = 'Admin အတည်ပြုနေပါသည်...';
@@ -281,11 +300,9 @@
     }
     GET('/login-info').then(info => {
       if (info.password) {
-        box.classList.remove('hide'); box.style.cssText = 'display:grid;gap:10px;margin:12px 0';
-        if (info.totp) code.classList.remove('hide');
-        msg.textContent = info.totp ? 'Username၊ Password နဲ့ Authenticator app ထဲက ၆ လုံးကုဒ် ထည့်ပါ။' : 'Username နဲ့ Password ထည့်ပြီး ဝင်ပါ။';
-        btn.onclick = pwLogin;
-        for (const el of [pass, code]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') pwLogin(); });
+        box.classList.remove('hide'); box.style.cssText = grid;
+        btn.onclick = submit;
+        for (const el of [user, pass]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
         user.focus();
       } else {
         btn.classList.add('hide');
@@ -561,7 +578,7 @@
       list.appendChild(h('div', { class: 'card' }, h('div', { class: 'list' }, r.items.map(u =>
         h('div', { class: 'item row nowrap', style: 'cursor:pointer', onclick: () => openUser(u.id, load) },
           h('div', { class: 'grow' },
-            h('div', { class: 'row nowrap' }, h('strong', { class: 'trunc' }, u.name), u.banned ? h('span', { class: 'pill bad' }, 'banned') : null, u.discount ? h('span', { class: 'pill acc' }, `-${u.discount}%`) : null),
+            h('div', { class: 'row nowrap' }, h('strong', { class: 'trunc' }, u.name), u.banned ? h('span', { class: 'pill bad' }, 'banned') : null, u.blockedBot ? h('span', { class: 'pill warn' }, 'bot block') : null, u.discount ? h('span', { class: 'pill acc' }, `-${u.discount}%`) : null),
             h('div', { class: 'muted small trunc' }, `${u.id}${u.username ? ' · @' + u.username : ''}`)),
           h('div', { class: 'right' }, h('div', { style: 'font-weight:700' }, fmt(u.balance)), h('div', { class: 'muted small' }, 'သုံး ' + fmt(u.totalSpent))))))));
       const p = pager(r, n => { page = n; load(); }); if (p) list.appendChild(p);
@@ -580,7 +597,7 @@
     const note = h('input', { type: 'text', value: u.note, placeholder: 'Admin note (user မမြင်ရ)', maxlength: 300 });
     const msg = h('textarea', { placeholder: 'ဒီ user ဆီ Telegram ကနေ ပို့မည့် စာ...' });
     m = modal(u.name, h('div', { class: 'stack' },
-      kv([['Telegram ID', u.id], ['Username', u.username ? '@' + u.username : '-'], ['လက်ကျန်ငွေ', h('strong', {}, mmk(u.balance))], ['စုစုပေါင်းသုံးငွေ', mmk(u.totalSpent)], ['Order', fmt(r.orderCount)], ['ဝင်သည့်ရက်', dt(u.createdAt)], ['Status', u.banned ? h('span', { class: 'pill bad' }, 'Banned') : h('span', { class: 'pill ok' }, 'Active')]]),
+      kv([['Telegram ID', u.id], ['Username', u.username ? '@' + u.username : '-'], ['လက်ကျန်ငွေ', h('strong', {}, mmk(u.balance))], ['စုစုပေါင်းသုံးငွေ', mmk(u.totalSpent)], ['Order', fmt(r.orderCount)], ['ဝင်သည့်ရက်', dt(u.createdAt)], ['Status', u.banned ? h('span', { class: 'pill bad' }, 'Banned') : h('span', { class: 'pill ok' }, 'Active')], ['Bot', u.blockedBot ? h('span', { class: 'pill warn' }, 'Bot ကို block/ဖျက်ထား (စာမပို့နိုင်)') : 'ပို့လို့ရ']]),
       h('div', { class: 'card flat' }, h('h3', {}, 'လက်ကျန်ငွေ ပြင်ရန်'), h('div', { style: 'height:8px' }), amount, h('div', { style: 'height:8px' }),
         h('div', { class: 'row' },
           h('button', { class: 'btn ok grow', onclick: (e) => amount.value && busy(e.target, async () => { await POST(`/users/${u.id}/balance`, { amount: amount.value, mode: 'add' }); toast('ငွေထည့်ပြီး', 'ok'); refresh(); }) }, '＋ ထည့်'),
@@ -952,8 +969,14 @@
       h('button', { class: 'btn primary', onclick: async (e) => {
         if (!text.value.trim()) return;
         if (!(await confirmBox('Broadcast ပို့မည်', 'User အားလုံးဆီ ဒီစာ ပို့မှာ သေချာပါသလား?', 'ပို့မည်'))) return;
-        busy(e.target, async () => { const r = await POST('/broadcast', { text: text.value, skipBanned: skip.checked }); toast(`${fmt(r.recipients)} ယောက်ဆီ ပို့စပြီ`, 'ok'); text.value = ''; });
+        busy(e.target, async () => { const r = await POST('/broadcast', { text: text.value, skipBanned: skip.checked }); toast(`${fmt(r.recipients)} ယောက်ဆီ ပို့စပြီ` + (r.skipped ? ` (bot block ထားသူ ${fmt(r.skipped)} ယောက် ကျော်)` : ''), 'ok'); text.value = ''; });
       } }, '📣 ပို့မည်'))));
+    // one customer only
+    const uid = h('input', { type: 'text', placeholder: 'User ID (Telegram ID) - Users စာမျက်နှာမှာ ကြည့်ပါ', inputmode: 'numeric', autocomplete: 'off' });
+    const one = h('textarea', { placeholder: 'ဒီ user တစ်ယောက်တည်းဆီ ပို့မည့် စာ...', style: 'min-height:110px', maxlength: 3500 });
+    view.append(h('div', { style: 'height:12px' }), h('div', { class: 'card' }, h('h2', {}, 'User တစ်ယောက်ချင်းကို ပို့ရန်'), h('div', { class: 'stack' }, uid, one,
+      h('button', { class: 'btn primary', onclick: (e) => { const id = uid.value.replace(/\D/g, ''); if (!id || !one.value.trim()) return toast('User ID နဲ့ စာ ထည့်ပါ', 'err'); busy(e.target, async () => { await POST(`/users/${id}/message`, { text: one.value }); toast('ပို့ပြီး ✅', 'ok'); one.value = ''; }); } }, '✉️ ပို့မည်'),
+      h('div', { class: 'muted small' }, 'Bot ကို block/ဖျက်ထားတဲ့ user ဆိုရင် "ပို့မရပါ" လို့ ပြပါမယ် (panel မပျက်ပါ)။ Users စာမျက်နှာထဲက user ကို နှိပ်ပြီးလည်း ပို့လို့ရပါတယ်။'))));
   }
 
   // ==================================================================
@@ -980,9 +1003,22 @@
         const preview = h('div', { class: 'small muted' });
         const upd = () => { const r = Number(rate.value), m = Number(mk.value); preview.textContent = r > 0 && m > 0 ? `ဥပမာ: Provider $1 → User ဆီ ${fmt(Math.ceil(r * m))} ကျပ် (Provider ကုန်ကျ ${fmt(Math.ceil(r))} ကျပ်၊ အမြတ် ${fmt(Math.ceil(r * m - r))})` : ''; };
         rate.oninput = mk.oninput = upd; upd();
+        // helper: copy the price the PROVIDER'S OWN website shows for one order -> we work out the USD->MMK rate it uses
+        const hs = h('input', { type: 'text', placeholder: 'Service ID (provider ရဲ့)', inputmode: 'numeric' });
+        const hq = h('input', { type: 'number', placeholder: 'အရေအတွက် (ဥပမာ 300)', inputmode: 'numeric' });
+        const hp = h('input', { type: 'number', placeholder: 'Provider website မှာ ပြတဲ့ ကျသင့်ငွေ (ဥပမာ 357.2)', step: 'any', inputmode: 'decimal' });
+        const hres = h('div', { class: 'small' });
+        const helper = h('details', {}, h('summary', { class: 'small', style: 'cursor:pointer;margin-top:8px' }, '🧮 Provider website နဲ့ ဈေးမကိုက်ရင် - rate ကို အလိုအလျောက်တွက်ရန်'),
+          h('div', { class: 'stack', style: 'margin-top:8px' },
+            h('div', { class: 'muted small' }, `${p} website မှာ service တစ်ခုကို အရေအတွက်ထည့်ကြည့်ရင် "ကျသင့်ငွေ" ပြပါတယ်။ အဲဒီဂဏန်းကို ထည့်ပါ၊ website က သုံးတဲ့ USD→MMK rate ကို တွက်ပေးပါမယ်။`), hs, hq, hp,
+            h('button', { class: 'btn', onclick: (e) => busy(e.target, async () => {
+              const r = await GET(`/pricing/implied-rate?provider=${p}&service=${encodeURIComponent(hs.value)}&qty=${encodeURIComponent(hq.value)}&shown=${encodeURIComponent(hp.value)}`);
+              hres.replaceChildren(h('div', {}, `${r.name}: $${r.usdPer1000}/1000 → ${hq.value} ခုမှာ $${r.usdForQty.toFixed(4)}`), h('div', {}, h('strong', {}, `Website rate ≈ ${r.implied.toFixed(2)} ကျပ်/ $1`)),
+                h('button', { class: 'btn sm primary', style: 'margin-top:6px', onclick: () => { rate.value = String(r.rounded); upd(); toast(`Rate ကို ${r.rounded} ထည့်ပြီး - အပေါ်က "သိမ်းမည်" ကို နှိပ်ပါ`, 'ok'); } }, `${r.rounded} ကို သုံးမည်`));
+            }) }, 'တွက်မည်'), hres));
         body.appendChild(h('div', { class: 'card' }, h('div', { class: 'row' }, h('h2', { class: 'grow', style: 'margin:0' }, p), v.configured ? h('span', { class: 'pill ok' }, 'API ချိတ်ပြီး') : h('span', { class: 'pill warn' }, 'API မချိတ်ရသေး')),
           h('div', { class: 'stack', style: 'margin-top:10px' }, field('$1 = ဘယ်လောက်ကျပ် (USD→MMK)', rate), field('Markup (ဆ) ဥပမာ 2.3', mk), preview,
-            h('button', { class: 'btn primary', onclick: (e) => busy(e.target, () => save({ [`${p}_usd_to_mmk`]: rate.value, [`${p}_markup`]: mk.value })) }, 'သိမ်းမည်'))));
+            h('button', { class: 'btn primary', onclick: (e) => busy(e.target, () => save({ [`${p}_usd_to_mmk`]: rate.value, [`${p}_markup`]: mk.value })) }, 'သိမ်းမည်'), helper)));
       }
     }
     function tabPayment() {
