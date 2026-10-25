@@ -1348,6 +1348,20 @@ bot.command('panel2fa', async (ctx) => {
   setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, m.message_id).catch(() => {}), 10 * 60 * 1000); // auto-delete after 10 minutes
 });
 
+// /panel2fa_test 123456 - checks a code from the Authenticator app against the key saved on the server (admin only; the code is NOT used up)
+bot.command('panel2fa_test', async (ctx) => {
+  if (!requireAdmin(ctx)) return;
+  if (!ctx.chat || ctx.chat.type !== 'private') return;
+  if (!panel || !panel.totp) return ctx.reply('⚠️ Admin panel မစတင်သေးပါ။');
+  const code = (ctx.message.text.split(/\s+/).slice(1).join('')).replace(/\D/g, '');
+  if (code.length !== 6) return ctx.reply('ပုံစံ: /panel2fa_test 123456   (app ထဲက ၆ လုံးကုဒ်)');
+  const r = panel.totp.diagnose(code);
+  if (!r.enabled) return ctx.reply(r.bad ? '❌ Render ထဲက PANEL_TOTP_SECRET က မှန်တဲ့ key မဟုတ်ပါ (စာလုံးအပိုပါနေ/မပြည့်စုံ)။ /panel2fa နဲ့ ရတဲ့ key ကို အစအဆုံး ပြန်ကူးထည့်ပါ။' : '❌ Server မှာ PANEL_TOTP_SECRET မရှိသေးပါ (သို့) deploy မပြီးသေးပါ။');
+  if (r.offsetSteps === 0) return ctx.reply('✅ Code မှန်ပါတယ် - key ကိုက်ပါတယ်။ Panel မှာ ၃၀ စက္ကန့်အတွင်း ထည့်ပါ (code အသစ်ပေါ်လာရင် အသစ်ကိုသုံးပါ)။');
+  if (r.offsetSteps !== null) return ctx.reply(`⏱ Key ကိုက်ပါတယ်၊ ဒါပေမယ့် ဖုန်းနာရီက ${Math.abs(r.offsetSteps) * 30} စက္ကန့်ခန့် ${r.offsetSteps < 0 ? 'နောက်ကျ' : 'ရှေ့ရောက်'}နေပါတယ်။ ဖုန်း Settings → Date & Time → Set automatically ဖွင့်ပါ (Google Authenticator ထဲက ⋮ → Time correction for codes → Sync now လည်းရ)။`);
+  return ctx.reply('❌ ဒီ code က Render ထဲက key နဲ့ မကိုက်ပါ။ ဆိုလိုတာက app ထဲက account နဲ့ Render မှာထည့်ထားတဲ့ key မတူပါဘူး (/panel2fa ကို နှစ်ခါပို့ရင် key အသစ်တစ်ခုစီထွက်ပါတယ်)။ ပြင်နည်း: /panel2fa တစ်ခါပဲပို့ → ရတဲ့ key ကို app ထဲ account အသစ်ထည့် + Render မှာ အစားထိုး → redeploy → app ထဲက အဟောင်းကိုဖျက်ပါ။');
+});
+
 bot.command('ban', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const id = ctx.message.text.split(' ')[1]; if (!id) return ctx.reply('ပုံစံ: /ban <user_id>');

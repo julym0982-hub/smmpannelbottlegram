@@ -75,6 +75,13 @@ function totpCheck(code) {
   if (ok) lastTotpStep = used; // a code can only be used once (replay protection)
   return ok;
 }
+// diagnosis for the admin (does NOT use up the code): which time offset, if any, makes this code match the saved key?
+function totpDiagnose(code) {
+  if (!TOTP_ON) return { enabled: false, bad: TOTP_BAD, set: !!TOTP_RAW };
+  const c = String(code || '').replace(/\s/g, ''); const step = Math.floor(Date.now() / 30000);
+  for (let d = -10; d <= 10; d++) if (hotp(TOTP_KEY, step + d) === c) return { enabled: true, offsetSteps: d };
+  return { enabled: true, offsetSteps: null };
+}
 const newTotpSecret = () => b32encode(crypto.randomBytes(20));
 const totpUri = (secret, label) => `otpauth://totp/${encodeURIComponent(label || 'SMM Admin')}?secret=${secret}&issuer=${encodeURIComponent('SMM Admin Panel')}&algorithm=SHA1&digits=6&period=30`;
 
@@ -252,7 +259,7 @@ module.exports = function mountAdminPanel(app, deps) {
       if (f.until > Date.now()) throw fail(429, 'မှားများလွန်းလို့ ၁၅ မိနစ် ပိတ်ထားပါတယ်။ နောက်မှ ပြန်စမ်းပါ။');
       const u = String(req.body.username || '').slice(0, 200), pw = String(req.body.password || '').slice(0, 200);
       // both compared in constant time, always both evaluated
-      const okU = crypto.timingSafeEqual(sha(u), sha(PANEL_USER));
+      const okU = crypto.timingSafeEqual(sha(u.trim().toLowerCase()), sha(PANEL_USER.toLowerCase())); // case-insensitive: phone keyboards capitalise the first letter
       const okP = crypto.timingSafeEqual(sha(pw), sha(PANEL_PASS));
       const okC = TOTP_ON ? totpCheck(req.body.code) : true; // 2FA code is always checked too, so the error never says which part was wrong
       if (!(okU && okP && okC)) {
@@ -261,6 +268,7 @@ module.exports = function mountAdminPanel(app, deps) {
         if (f.n >= LOCK_AFTER) { f.until = Date.now() + LOCK_MS; f.n = 0; }
         failedLogins.set(ip, f);
         await new Promise(r => setTimeout(r, 800)); // slow guessing down
+        console.error(`panel login failed (ip ${ip}): username ${okU ? 'ok' : 'WRONG'}, password ${okP ? 'ok' : 'WRONG'}${TOTP_ON ? ', 2FA code ' + (okC ? 'ok' : 'WRONG') : ''}`);
         await AdminLog.create({ admin: 'unknown', action: 'login_failed', detail: `ip ${ip}` }).catch(() => {});
         if (f.until > Date.now()) for (const id of (deps.adminIds || [])) safeSend(id, `⚠️ Admin Panel login မှားနေပါတယ် (ip ${ip}) - ၁၅ မိနစ် ပိတ်လိုက်ပါပြီ။ မိမိမဟုတ်ရင် PANEL_PASSWORD ပြောင်းပါ။`);
         throw fail(401, TOTP_ON ? 'Username / Password / 2FA code တစ်ခုခု မှားနေပါသည်။' : 'Username သို့မဟုတ် Password မှားနေပါသည်။');
@@ -1142,5 +1150,5 @@ module.exports = function mountAdminPanel(app, deps) {
   router.use('/api', api);
   app.use(BASE, router);
 
-  return { createLoginUrl, linkLoginEnabled: LINK_LOGIN, passwordLoginEnabled: PASSWORD_LOGIN, loginPageUrl: () => (baseUrl() ? baseUrl() + BASE : null), totp: { enabled: TOTP_ON, newSecret: newTotpSecret, uri: totpUri }, _test: { hotp, b32decode, b32encode } };
+  return { createLoginUrl, linkLoginEnabled: LINK_LOGIN, passwordLoginEnabled: PASSWORD_LOGIN, loginPageUrl: () => (baseUrl() ? baseUrl() + BASE : null), totp: { enabled: TOTP_ON, diagnose: totpDiagnose, newSecret: newTotpSecret, uri: totpUri }, _test: { hotp, b32decode, b32encode } };
 };
