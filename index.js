@@ -810,7 +810,7 @@ async function aiReply(ctx, text) {
   if (!ai.enabled() || !(await ai.hasKeys())) return false; // not configured -> stay silent like before
   if (bot.telegram.sendChatAction) bot.telegram.sendChatAction(ctx.chat.id, 'typing').catch(() => {});
   const res = await ai.chat({
-    userId: String(ctx.from.id), name: displayName(ctx.from), balance: ctx.dbUser ? ctx.dbUser.balance : null, text: text.slice(0, 1000)
+    userId: String(ctx.from.id), name: displayName(ctx.from), username: ctx.from.username || '', balance: ctx.dbUser ? ctx.dbUser.balance : null, text: text.slice(0, 1000)
   });
   if (res.ok) { await ctx.reply(res.text.slice(0, 4000)); return true; }
   if (res.reason === 'limit') { await ctx.reply(texts.t('ai_limit_msg')); return true; }
@@ -1949,6 +1949,7 @@ setInterval(() => { lowBalanceSweep(); }, 30 * 60 * 1000);
 mongoose.connect(MONGODB_URI).then(async () => {
   console.log('MongoDB connected');
   await texts.preload();
+  require('./chatlog').init(); // separate MongoDB for AI chat history (optional)
   migrateOrderNos().catch(err => console.error('order number migration failed:', err.message));
   retention.autoCleanup();
   setInterval(() => { retention.autoCleanup(); }, 6 * 3600 * 1000);

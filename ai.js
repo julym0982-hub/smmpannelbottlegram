@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const { ApiKey, AiUsage, MenuButton } = require('./models');
 const texts = require('./texts');
+const chatlog = require('./chatlog');
 
 const MMT_OFFSET = 6.5 * 3600 * 1000;
 const today = () => new Date(Date.now() + MMT_OFFSET).toISOString().slice(0, 10);
@@ -187,7 +188,7 @@ function safeName(n) {
 const ATTACK_RE = /(system\s*prompt|initial\s*prompt|ignore\s+(all\s+|the\s+)?(previous|above|prior)|disregard\s+(all\s+)?(previous|above)|developer\s*mode|jailbreak|\bDAN\b|reveal\s+(your|the)\s+(prompt|instructions)|admin\s*panel|adminlogin|panel2fa|PANEL_(PASSWORD|TOTP|PATH|USERNAME)|authenticator|BOT_TOKEN|api[\s_-]*key|prompt\s*(ကို|ပြ|ပေး)|ညွှန်ကြားချက်\s*(တွေ|များ)?\s*(ကို)?\s*(ပြ|မေ့|ကူးပေး))/i;
 const BLOCKED_REPLY = 'အဲဒါလေးတွေတော့ ပြောပြလို့ မရပါဘူးရှင့် 🙏 service ဝယ်တာ၊ ငွေဖြည့်တာ၊ order ကိစ္စတွေဆို ကူညီပေးပါ့မယ်နော်။';
 function secretValues() {
-  const names = ['BOT_TOKEN', 'MONGODB_URI', 'PANEL_PASSWORD', 'PANEL_SESSION_SECRET', 'PANEL_TOTP_SECRET', 'PANEL_USERNAME', 'AI_KEY_SECRET', 'SHWEBOOST_API_KEY', 'HIROSHI_API_KEY', 'SECSERS_API_KEY'];
+  const names = ['BOT_TOKEN', 'MONGODB_URI', 'MONGODB_URI_AI', 'PANEL_PASSWORD', 'PANEL_SESSION_SECRET', 'PANEL_TOTP_SECRET', 'PANEL_USERNAME', 'AI_KEY_SECRET', 'SHWEBOOST_API_KEY', 'HIROSHI_API_KEY', 'SECSERS_API_KEY'];
   return names.map(n => process.env[n]).filter(v => v && String(v).length >= 8).map(String);
 }
 const SECRET_PATTERNS = [/AIza[0-9A-Za-z_\-]{20,}/, /gsk_[A-Za-z0-9]{20,}/, /\b\d{8,10}:[A-Za-z0-9_\-]{30,}\b/, /mongodb(\+srv)?:\/\//i, /\/admin\/login\?token=/i];
@@ -203,15 +204,16 @@ function leaks(out, prompt) {
 }
 
 // full customer chat turn: limit -> prompt -> AI (with failover) -> memory
-async function chat({ userId, name, balance, text }) {
-  if (ATTACK_RE.test(text)) { console.error(`AI guard: blocked suspicious message from ${userId}`); return { ok: true, text: BLOCKED_REPLY }; }
+async function chat({ userId, name, username, balance, text }) {
+  const rec = (reply, extra = {}) => chatlog.save({ userId, name, username, question: text, reply, ...extra });
+  if (ATTACK_RE.test(text)) { console.error(`AI guard: blocked suspicious message from ${userId}`); rec(BLOCKED_REPLY, { blocked: true }); return { ok: true, text: BLOCKED_REPLY }; }
   const lim = await takeQuestion(userId);
   if (!lim.allowed) return { ok: false, reason: 'limit' };
   const vars = { name: safeName(name), balance: balance == null ? '' : balance };
   const system = buildSystem(vars, await autoFacts());
   const res = await ask({ system, history: getHistory(userId), text });
   if (res.ok && leaks(res.text, texts.t('ai_system_prompt', vars))) { console.error(`AI guard: blocked a leaking reply to ${userId}`); res.text = BLOCKED_REPLY; }
-  if (res.ok) remember(userId, text, res.text);
+  if (res.ok) { remember(userId, text, res.text); rec(res.text, { provider: res.provider, blocked: res.text === BLOCKED_REPLY }); }
   // the AI never answered (all keys down) - do not charge the customer a question
   else if (lim.used) await AiUsage.findOneAndUpdate({ _id: `${userId}:${today()}` }, { $inc: { count: -1 } });
   return res;

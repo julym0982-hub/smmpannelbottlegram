@@ -160,3 +160,8 @@ Panel → More → **AI Bot**. Menu ခလုတ်မဟုတ်တဲ့ စ�
 
 ## v13 – ဈေးနှုန်း တိုက်ဆိုင်စစ်ရန်
 Panel → Settings → ဈေးနှုန်း → provider တစ်ခုချင်းစီအောက်က "🧮 Provider website နဲ့ ဈေးမကိုက်ရင်..." မှာ service ID၊ အရေအတွက်၊ provider website ပြတဲ့ ကျသင့်ငွေ ထည့်ရင် website သုံးတဲ့ USD→MMK rate ကို တွက်ပေးမယ်။ (shweboost website က ≈2100 သုံး၊ bot default 4400 ဖြစ်နေရင် ဈေး ၂ ဆလောက် ကွာမယ်။)
+
+## AI Chat Log (ခွဲထားတဲ့ MongoDB)
+- Render env မှာ `MONGODB_URI_AI` (MongoDB အသစ်၏ connection string) ထည့်ပါ။ မထည့်ရင် chat log ပိတ်ထားမည် (bot ပုံမှန်အလုပ်လုပ်သည်)။
+- `AI_LOG_DAYS` (မထည့်ရင် 7) — ဒီရက်ကျော်တဲ့ chat တွေကို MongoDB က TTL index နဲ့ အလိုအလျောက်ဖျက်သည်။
+- Panel → AI Bot စာမျက်နှာအောက်ဆုံးမှာ user စာရင်း၊ နှိပ်ရင် စကားဝိုင်းအပြည့်အစုံ ကြည့်လို့ရသည်။

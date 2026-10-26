@@ -13,6 +13,7 @@ const { Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, Men
 const mongoose = require('mongoose');
 const retention = require('./retention');
 const ai = require('./ai');
+const chatlog = require('./chatlog');
 const providers = require('./providers');
 const texts = require('./texts');
 
@@ -1182,6 +1183,23 @@ module.exports = function mountAdminPanel(app, deps) {
     const message = str(req.body.message, 'Message', { max: 1000 });
     const r = await ai.ask({ system: ai.buildSystem({ name: 'Admin စမ်းသပ်သူ', balance: '' }, await ai.autoFacts()), history: Array.isArray(req.body.history) ? req.body.history.slice(-12).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text || '').slice(0, 1000) })) : [], text: message });
     res.json({ ok: r.ok, reply: r.ok ? r.text : '', provider: r.provider || '', error: r.ok ? '' : (r.detail || r.reason) });
+  }));
+
+  // ---- customer <-> AI conversations (stored in the separate AI-log database) ----
+  api.get('/ai/chats', wrap(async (req, res) => {
+    res.json(await chatlog.listUsers({ q: req.query.q, page: parseInt(req.query.page, 10) || 1, per: 20, sort: req.query.sort === 'count' ? 'count' : 'recent' }));
+  }));
+  api.get('/ai/chats/:userId', wrap(async (req, res) => {
+    const id = String(req.params.userId || '').replace(/\D/g, '');
+    if (!id) throw fail(400, 'User ID မမှန်ပါ');
+    res.json({ days: chatlog.days, items: await chatlog.conversation(id) });
+  }));
+  api.delete('/ai/chats/:userId', wrap(async (req, res) => {
+    const id = String(req.params.userId || '').replace(/\D/g, '');
+    if (!id) throw fail(400, 'User ID မမှန်ပါ');
+    const n = await chatlog.clearUser(id);
+    log(req, 'ai_chat_clear', id);
+    res.json({ ok: true, deleted: n });
   }));
 
   api.get('/logs', wrap(async (req, res) => {
