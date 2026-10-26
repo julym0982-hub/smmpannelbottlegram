@@ -933,6 +933,43 @@
     const sendBtn = h('button', { class: 'btn primary', onclick: (e) => send(e.target) }, 'ပို့');
     msg.addEventListener('keydown', e => { if (e.key === 'Enter') send(sendBtn); });
     view.append(h('div', { class: 'card' }, h('h2', {}, '💬 စမ်းပြောကြည့်ရန်'), h('div', { class: 'muted small', style: 'margin-bottom:8px' }, 'သိမ်းထားပြီးသား prompt နဲ့ key တွေကို သုံးပြီး customer မေးသလို စမ်းမေးနိုင်ပါတယ် (နေ့စဉ် limit မပါပါ)။'), log, h('div', { class: 'row nowrap' }, h('div', { class: 'grow' }, msg), sendBtn)));
+
+    // --- customer <-> AI conversations (read-only, auto-deleted by the server)
+    const chatBox = h('div', {});
+    const chatList = h('div', {});
+    const qBox = h('input', { type: 'text', placeholder: 'ID / နာမည် / @username ရှာရန်...', autocomplete: 'off' });
+    let chatPage = 1, chatQ = '', chatSort = 'count';
+    const sortSel = h('select', {}, h('option', { value: 'count' }, '🔥 အများဆုံးပြောတဲ့သူ အပေါ်ဆုံး'), h('option', { value: 'recent' }, '🕒 နောက်ဆုံးပြောတဲ့သူ အပေါ်ဆုံး'));
+    sortSel.addEventListener('change', () => { chatSort = sortSel.value; chatPage = 1; loadChats(); });
+    async function openChat(u) {
+      let r; try { r = await GET('/ai/chats/' + encodeURIComponent(u.userId)); } catch (e) { return fail(e); }
+      const body = h('div', { class: 'stack', style: 'max-height:65vh;overflow:auto' },
+        r.items.length ? r.items.map(m => h('div', { class: 'stack', style: 'gap:6px' },
+          h('div', { class: 'muted small' }, dt(m.createdAt) + (m.provider ? ' · ' + m.provider : '') + (m.blocked ? ' · 🚫 blocked' : '')),
+          h('div', { class: 'item', style: 'margin-left:24px;white-space:pre-wrap;word-break:break-word' }, '👤 ' + (m.question || '')),
+          h('div', { class: 'item', style: 'margin-right:24px;white-space:pre-wrap;word-break:break-word' }, '🤖 ' + (m.reply || '')))) : empty('စကားဝိုင်း မရှိတော့ပါ'));
+      const m = modal(`${u.name || 'User'} ${u.username ? '@' + u.username : ''} (${u.userId}) · ${fmt(u.count)} ကြိမ်`, h('div', { class: 'stack' }, body,
+        h('div', { class: 'row', style: 'justify-content:space-between' },
+          h('span', { class: 'muted small' }, `ဒီ user ရဲ့ chat ကို ${r.days} ရက်ကျော်ရင် အလိုအလျောက်ဖျက်မည်`),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn sm', onclick: () => openUser(u.userId) }, '👤 User'),
+            h('button', { class: 'btn sm danger', onclick: async () => { if (await confirmBox('Chat ဖျက်မည်', 'ဒီ user ရဲ့ AI chat အားလုံး ဖျက်မလား?', 'ဖျက်မည်', true)) { try { await DEL('/ai/chats/' + encodeURIComponent(u.userId)); m.close(); loadChats(); } catch (e) { fail(e); } } } }, '🗑 ဖျက်မည်')))), { wide: true });
+    }
+    async function loadChats() {
+      let r; try { r = await GET(`/ai/chats?page=${chatPage}&sort=${chatSort}&q=${encodeURIComponent(chatQ)}`); } catch (e) { return fail(e); }
+      if (!r.enabled) { chatList.replaceChildren(empty('AI chat log ပိတ်ထားသည် — Render env ထဲမှာ MONGODB_URI_AI ထည့်ပါ')); return; }
+      chatList.replaceChildren(r.items.length ? h('div', { class: 'list' }, r.items.map(u =>
+        h('button', { class: 'item row nowrap', style: 'text-align:left;width:100%', onclick: () => openChat(u) },
+          h('div', { class: 'grow' }, h('strong', {}, u.name || 'User'), ' ', h('span', { class: 'muted small' }, (u.username ? '@' + u.username + ' · ' : '') + u.userId),
+            h('div', { class: 'muted small' }, u.lastQuestion)),
+          h('div', { class: 'muted small', style: 'text-align:right;white-space:nowrap' }, h('strong', {}, `${fmt(u.count)} ကြိမ်`), h('br'), `ဒီနေ့ ${fmt(u.today)}`, h('br'), ago(u.last))))) : empty('Chat မရှိသေးပါ'));
+      const p = pager(r, n => { chatPage = n; loadChats(); }); if (p) chatList.appendChild(p);
+      chatBox.querySelector('.chat-note').textContent = `User ${fmt(r.total)} ယောက် · ${r.days} ရက်ကျော်တာတွေကို အလိုအလျောက်ဖျက်သည်`;
+    }
+    qBox.addEventListener('keydown', e => { if (e.key === 'Enter') { chatQ = qBox.value.trim(); chatPage = 1; loadChats(); } });
+    chatBox.append(h('h2', {}, '🗂 Customer နဲ့ AI ပြောထားတာများ'), h('div', { class: 'muted small chat-note', style: 'margin-bottom:8px' }), h('div', { class: 'stack' }, qBox, sortSel, chatList));
+    view.append(h('div', { style: 'height:12px' }), h('div', { class: 'card' }, chatBox));
+    loadChats();
   }
 
   // ==================================================================
