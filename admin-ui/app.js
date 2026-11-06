@@ -989,6 +989,15 @@
         h('div', { class: 'item row nowrap' },
           h('div', { class: 'grow' }, h('strong', { class: 'mono' }, c.code), h('div', { class: 'muted small' }, `${fmt(c.amount)} ကျပ် · သုံးပြီး ${c.used} · ကျန် ${c.remaining}`)),
           h('button', { class: 'btn sm', onclick: () => navigator.clipboard && navigator.clipboard.writeText(c.code).then(() => toast('Copy ပြီး', 'ok')) }, 'Copy'),
+          h('button', { class: 'btn sm', onclick: async () => {
+            const msg = await promptBox('Coupon ပို့မည်: ' + c.code, 'User တွေဆီ ပို့မည့်စာ (မရေးရင် Cupon code ' + c.code + ' ဆိုပြီး ပို့မယ်)', { textarea: true, okLabel: 'ပို့မည်', hint: 'User ID မထည့်ရင် User အားလုံးဆီ ပို့ပါမယ်။ User တစ်ယောက်တည်းဆိုရင် စာအစမှာ ID ကို "123456789: " ပုံစံနဲ့ ရေးပါ။' });
+            if (msg === null || msg === undefined) return;
+            let userId = '', text = String(msg);
+            const m = text.match(/^\s*(\d{5,15})\s*:\s*([\s\S]*)$/);
+            if (m) { userId = m[1]; text = m[2]; }
+            if (!(await confirmBox('Coupon ပို့မည်', userId ? ('User ' + userId + ' တစ်ယောက်တည်းဆီ ပို့မှာ သေချာပါသလား?') : 'User အားလုံးဆီ ပို့မှာ သေချာပါသလား?', 'ပို့မည်'))) return;
+            try { const r = await POST('/coupons/' + encodeURIComponent(c.code) + '/send', { text, userId }); toast(fmt(r.recipients) + ' ယောက်ဆီ ပို့စပြီ ✅', 'ok'); } catch (e) { fail(e); }
+          } }, '📣 ပို့'),
           h('button', { class: 'btn sm danger', onclick: async () => { if (await confirmBox('Coupon ဖျက်မည်', c.code, 'ဖျက်မည်', true)) { try { await DEL('/coupons/' + encodeURIComponent(c.code)); load(); } catch (e) { fail(e); } } } }, '🗑'))))) : empty('Coupon မရှိသေးပါ'));
     }
     load();
