@@ -188,16 +188,68 @@ async function trySend(chatId, text, extra) {
 }
 async function safeSend(chatId, text, extra) { return (await trySend(chatId, text, extra)) === 'ok'; }
 
+// ---------------------------------------------------------------------
+// Coupon-aware admin messages
+// When an admin message (/sendmessage, /allsendmessage, panel broadcast, panel
+// "message one user") contains an EXISTING coupon code (e.g. TEST), the user
+// receives the same text with the code in bold, plus inline buttons:
+//   [ Copy ]  (tap = code copied to clipboard)
+//   [ Enter Coupon Code ]  (tap = bot asks for the code, then redeems it)
+// ---------------------------------------------------------------------
+const COUPON_PROMPT = 'Cupon code ရိုက်ထည့်ပါ သို့မဟုတ် Copy Paste ချပါ👇👇';
+async function findCouponInText(text) {
+  const tokens = [];
+  const re = /[A-Za-z0-9_-]{2,}/g;
+  let m, prev = '';
+  while ((m = re.exec(text))) {
+    tokens.push({ word: m[0], prev });
+    prev = m[0];
+  }
+  if (!tokens.length) return null;
+  const cands = [...new Set(tokens.map(t => t.word.toUpperCase()))];
+  const found = await Coupon.find({ _id: { $in: cands } }).select('_id').lean();
+  if (!found.length) return null;
+  const ids = new Set(found.map(c => c._id));
+  // exact (case-sensitive) match, or lowercase word right after "code/cupon/coupon"
+  for (const t of tokens) {
+    if (ids.has(t.word)) return t.word;
+    if (ids.has(t.word.toUpperCase()) && /^(cupon|coupon|code)$/i.test(t.prev)) return t.word.toUpperCase();
+  }
+  return null;
+}
+// returns { text, extra } ready for trySend/safeSend/startBroadcast
+async function buildAdminMessage(rawText) {
+  const code = await findCouponInText(rawText);
+  if (!code) return { text: rawText, extra: undefined };
+  const html = esc(rawText).replace(
+    new RegExp('(^|[^A-Za-z0-9_-])(' + code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?![A-Za-z0-9_-])', 'gi'),
+    (_, pre, w) => pre + '<b>' + w + '</b>'
+  );
+  return {
+    text: html,
+    extra: {
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📋 Copy', copy_text: { text: code } }],
+          [{ text: '🎁 Enter Cupon Code', callback_data: 'enter_coupon' }]
+        ]
+      }
+    }
+  };
+}
+
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 // Run broadcasts outside the Telegram update handler so mass messaging does
 // not delay replies to other users. The delay helps avoid rate-limit bursts.
-function startBroadcast(adminId, recipients, text, skippedBlocked = 0) {
+function startBroadcast(adminId, recipients, text, skippedBlocked = 0, extra) {
   setImmediate(async () => {
     const n = { ok: 0, blocked: 0, error: 0 };
     try {
       for (const recipientId of recipients) {
-        n[await trySend(recipientId, text)]++;
+        n[await trySend(recipientId, text, extra)]++;
         await delay(75);
       }
     } catch (err) { console.error('broadcast crashed:', err && err.message); }
@@ -489,7 +541,13 @@ bot.hears(BTN_HISTORY, async (ctx) => { resetState(ctx.from.id); await sendHisto
 bot.action(/^hist_(\d+)$/, async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await sendHistory(ctx, parseInt(ctx.match[1], 10), true); });
 bot.action('noop', (ctx) => ctx.answerCbQuery().catch(() => {}));
 
-bot.hears(BTN_COUPON, async (ctx) => { st(ctx.from.id).level = 'coupon'; await ctx.reply('🎁 Cupon code ကို ရိုက်ထည့်ပေးပါရှင့်'); });
+bot.hears(BTN_COUPON, async (ctx) => { st(ctx.from.id).level = 'coupon'; await ctx.reply(COUPON_PROMPT); });
+// inline "Enter Cupon Code" button under admin coupon messages - same as the home menu button
+bot.action('enter_coupon', async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  st(ctx.from.id).level = 'coupon';
+  await ctx.reply(COUPON_PROMPT);
+});
 
 // =======================================================================
 // Platform -> Category -> Service navigation (bottom keyboard, scrollable)
@@ -709,14 +767,16 @@ bot.on('text', async (ctx, next) => {
   // ---- admin: send message to one user / all users ----
   if (s.level === 'admin_send_one' && isAdmin(ctx.from.id)) {
     const target = s.sendMessageTarget; resetState(ctx.from.id);
-    const ok = await safeSend(target, text);
+    const msg = await buildAdminMessage(text);
+    const ok = await safeSend(target, msg.text, msg.extra);
     return ctx.reply(ok ? '✅ ပို့ပြီးပါပြီ။' : '❌ ပို့မရပါ (block ထားနိုင်သည်)။');
   }
   if (s.level === 'admin_send_all' && isAdmin(ctx.from.id)) {
     const adminId = String(ctx.from.id);
     resetState(ctx.from.id);
     const aud = await broadcastAudience();
-    startBroadcast(adminId, aud.ids, text, aud.skipped);
+    const msg = await buildAdminMessage(text);
+    startBroadcast(adminId, aud.ids, msg.text, aud.skipped, msg.extra);
     return ctx.reply(`✅ User ${aud.ids.length} ယောက်ဆီ စာပို့ခြင်းကို စတင်လိုက်ပါပြီ။ Bot ကို ဆက်သုံးနိုင်ပါတယ်။`);
   }
 
@@ -1741,7 +1801,7 @@ bot.command('sendmessage', async (ctx) => {
   const parts = ctx.message.text.split(' ');
   const id = parts[1]; const rest = parts.slice(2).join(' ');
   if (!id) return ctx.reply('ပုံစံ: /sendmessage <user_id> [message]');
-  if (rest) { const ok = await safeSend(id, rest); return ctx.reply(ok ? '✅ ပို့ပြီးပါပြီ။' : '❌ ပို့မရပါ။'); }
+  if (rest) { const msg = await buildAdminMessage(rest); const ok = await safeSend(id, msg.text, msg.extra); return ctx.reply(ok ? '✅ ပို့ပြီးပါပြီ။' : '❌ ပို့မရပါ။'); }
   const s = st(ctx.from.id); s.level = 'admin_send_one'; s.sendMessageTarget = id;
   await ctx.reply('ပို့လိုသော message ကို ရိုက်ထည့်ပါ');
 });
@@ -1750,7 +1810,8 @@ bot.command('allsendmessage', async (ctx) => {
   const rest = ctx.message.text.split(' ').slice(1).join(' ');
   if (rest) {
     const aud = await broadcastAudience();
-    startBroadcast(String(ctx.from.id), aud.ids, rest, aud.skipped);
+    const msg = await buildAdminMessage(rest);
+    startBroadcast(String(ctx.from.id), aud.ids, msg.text, aud.skipped, msg.extra);
     return ctx.reply(`✅ User ${aud.ids.length} ယောက်ဆီ စာပို့ခြင်းကို စတင်လိုက်ပါပြီ။ Bot ကို ဆက်သုံးနိုင်ပါတယ်။`);
   }
   st(ctx.from.id).level = 'admin_send_all';
@@ -1918,7 +1979,7 @@ if (SELF_URL) {
 // Web admin panel (Express) - see admin.js. Login links come from /adminlogin.
 // ---------------------------------------------------------------------
 panel = mountAdminPanel(app, {
-  bot, adminIds: ADMIN_IDS, isAdmin, safeSend, startBroadcast, broadcastAudience, sanitizeName, toBoldUnicode,
+  bot, adminIds: ADMIN_IDS, isAdmin, safeSend, buildAdminMessage, startBroadcast, broadcastAudience, sanitizeName, toBoldUnicode,
   approveDeposit, rejectDeposit, refundOrder, refundIfPartial, refreshOrderStatuses, priceFor, orderRef
 });
 

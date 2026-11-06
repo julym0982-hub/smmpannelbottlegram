@@ -182,7 +182,7 @@ const NUMERIC_KEYS = () => [
 ];
 
 module.exports = function mountAdminPanel(app, deps) {
-  const { bot, isAdmin, safeSend, startBroadcast, sanitizeName, toBoldUnicode, approveDeposit, rejectDeposit, refundOrder, refundIfPartial, refreshOrderStatuses } = deps;
+  const { bot, isAdmin, safeSend, buildAdminMessage, startBroadcast, sanitizeName, toBoldUnicode, approveDeposit, rejectDeposit, refundOrder, refundIfPartial, refreshOrderStatuses } = deps;
 
   const loginTokens = new Map(); // token -> { adminId, exp }
   const loginAttempts = new Map(); // ip -> [timestamps]
@@ -598,7 +598,8 @@ module.exports = function mountAdminPanel(app, deps) {
   api.post('/users/:id/message', wrap(async (req, res) => {
     const text = str(req.body.text, 'Message', { max: 3500 });
     if (!(await User.exists({ _id: String(req.params.id) }))) throw fail(404, 'User မတွေ့ပါ');
-    const ok = await safeSend(String(req.params.id), text);
+    const msg = await buildAdminMessage(text);
+    const ok = await safeSend(String(req.params.id), msg.text, msg.extra);
     log(req, 'message_user', `${req.params.id} (${ok ? 'sent' : 'failed'})`);
     if (!ok) throw fail(502, 'ပို့မရပါ - User က bot ကို block/ဖျက်ထားနိုင်ပါတယ်');
     res.json({ ok: true });
@@ -607,7 +608,8 @@ module.exports = function mountAdminPanel(app, deps) {
   api.post('/broadcast', wrap(async (req, res) => {
     const text = str(req.body.text, 'Message', { max: 3500 });
     const aud = await deps.broadcastAudience(req.body.skipBanned ? { banned: { $ne: true } } : {});
-    startBroadcast(req.adminId, aud.ids, text, aud.skipped);
+    const msg = await buildAdminMessage(text);
+    startBroadcast(req.adminId, aud.ids, msg.text, aud.skipped, msg.extra);
     log(req, 'broadcast', `${aud.ids.length} users (+${aud.skipped} blocked skipped): ${text.slice(0, 80)}`);
     res.json({ ok: true, recipients: aud.ids.length, skipped: aud.skipped });
   }));
@@ -930,6 +932,27 @@ module.exports = function mountAdminPanel(app, deps) {
     await Coupon.create({ _id: code, amount, remaining: count });
     log(req, 'coupon_create', `${code} ${amount}x${count}`);
     res.json({ ok: true, code });
+  }));
+  // send a coupon to users (all, or one user id) - the bot adds bold code + Copy + Enter Cupon Code buttons
+  api.post('/coupons/:code/send', wrap(async (req, res) => {
+    const code = String(req.params.code).toUpperCase();
+    if (!(await Coupon.exists({ _id: code }))) throw fail(404, 'Coupon မတွေ့ပါ');
+    let text = str(req.body.text, 'Message', { max: 3000, required: false });
+    if (!text) text = '🎁 Cupon code ' + code;
+    else if (!text.includes(code)) text += '\n\n🎁 Cupon code ' + code;
+    const msg = await buildAdminMessage(text);
+    const target = String(req.body.userId || '').replace(/\D/g, '');
+    if (target) {
+      if (!(await User.exists({ _id: target }))) throw fail(404, 'User မတွေ့ပါ');
+      const ok = await safeSend(target, msg.text, msg.extra);
+      log(req, 'coupon_send', `${code} -> ${target} (${ok ? 'sent' : 'failed'})`);
+      if (!ok) throw fail(502, 'ပို့မရပါ - User က bot ကို block/ဖျက်ထားနိုင်ပါတယ်');
+      return res.json({ ok: true, recipients: 1, skipped: 0 });
+    }
+    const aud = await deps.broadcastAudience(req.body.skipBanned === false ? {} : { banned: { $ne: true } });
+    startBroadcast(req.adminId, aud.ids, msg.text, aud.skipped, msg.extra);
+    log(req, 'coupon_send', `${code} -> ${aud.ids.length} users`);
+    res.json({ ok: true, recipients: aud.ids.length, skipped: aud.skipped });
   }));
   api.delete('/coupons/:code', wrap(async (req, res) => {
     const c = await Coupon.findByIdAndDelete(String(req.params.code).toUpperCase());
