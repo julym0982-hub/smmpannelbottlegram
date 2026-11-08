@@ -10,7 +10,8 @@ const chatlog = require('./chatlog');
 
 const MMT_OFFSET = 6.5 * 3600 * 1000;
 const today = () => new Date(Date.now() + MMT_OFFSET).toISOString().slice(0, 10);
-const COOLDOWN = { quota: 15 * 60 * 1000, invalid: 6 * 3600 * 1000 };
+// 'rate' = per-minute limit (TPM/RPM): only a few seconds. 'quota' = per-day limit or exhausted: long.
+const COOLDOWN = { quota: 15 * 60 * 1000, invalid: 6 * 3600 * 1000, rate: 20 * 1000 };
 
 // ---- encryption (AES-256-GCM). Set AI_KEY_SECRET in the environment so the
 // keys keep working even if BOT_TOKEN ever changes.
@@ -47,16 +48,21 @@ async function callProvider(provider, apiKey, { system, history, text, tools }) 
     const parts = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
     const out = (parts || []).map(p => p.text || '').join('').trim();
     if (!out) throw Object.assign(new Error('empty reply (blocked or no text)'), { kind: 'empty' });
-    return out;
+    return { text: out, tokens: (data.usageMetadata && data.usageMetadata.totalTokenCount) || 0 };
   }
   if (provider === 'groq') {
     const model = texts.t('ai_model_groq').trim();
     const messages = [{ role: 'system', content: system }, ...history.map(m => ({ role: m.role, content: m.text })), { role: 'user', content: text }];
-    const post = async (body) => (await axios.post(
-      'https://api.groq.com/openai/v1/chat/completions',
-      body,
-      { timeout: 30000, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` } }
-    )).data;
+    let tokens = 0; // total tokens this question used (every tool round counts) - used to spread load over keys
+    const post = async (body) => {
+      const data = (await axios.post(
+        'https://api.groq.com/openai/v1/chat/completions',
+        body,
+        { timeout: 30000, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` } }
+      )).data;
+      tokens += (data && data.usage && data.usage.total_tokens) || 0;
+      return data;
+    };
     const base = { model, temperature, max_tokens: maxTokens };
     if (model.includes('gpt-oss')) base.reasoning_effort = 'low'; // reasoning model: keep it fast, don't burn max_tokens on thinking
     if (tools) { base.tools = tools.definitions; base.tool_choice = 'auto'; }
@@ -77,8 +83,8 @@ async function callProvider(provider, apiKey, { system, history, text, tools }) 
         continue;
       }
       const out = msg && String(msg.content || '').trim();
-      if (out) return out;
-      if (tools && round > 0) return 'ဟုတ်ကဲ့ရှင့် 😊'; // tools did the work (e.g. confirm button is sent by the bot) but the model said nothing
+      if (out) return { text: out, tokens };
+      if (tools && round > 0) return { text: 'ဟုတ်ကဲ့ရှင့် 😊', tokens }; // tools did the work (e.g. confirm button is sent by the bot) but the model said nothing
       throw Object.assign(new Error('empty reply'), { kind: 'empty' });
     }
     throw Object.assign(new Error('too many tool rounds'), { kind: 'empty' });
@@ -91,10 +97,18 @@ function classify(err) {
   if (err.kind) return err.kind;
   const status = err.response && err.response.status;
   const msg = String(err.response && err.response.data && (err.response.data.error && (err.response.data.error.message || err.response.data.error) || '') || err.message || '');
-  if (status === 429) return 'quota';
+  if (status === 429) return /per minute|\bTPM\b|\bRPM\b|per second/i.test(msg) ? 'rate' : 'quota';
   if (status === 401 || status === 403 || (status === 400 && /api key|permission|invalid/i.test(msg))) return 'invalid';
   if (status === 404 || /model/i.test(msg) && status === 400) return 'model';
   return 'transient';
+}
+// how long the provider says to wait ("retry-after" header or "Please try again in 1m2.5s")
+function retryAfterMs(err) {
+  const h = err.response && err.response.headers && err.response.headers['retry-after'];
+  if (h && Number.isFinite(Number(h))) return Number(h) * 1000;
+  const m = String(err.response && err.response.data && err.response.data.error && err.response.data.error.message || '').match(/try again in\s+(?:(\d+)h)?(?:(\d+)m(?!s))?(?:([\d.]+)s)?/i);
+  if (m && (m[1] || m[2] || m[3])) return (Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0)) * 1000;
+  return 0;
 }
 const errText = (err) => {
   const status = err.response && err.response.status;
@@ -103,13 +117,21 @@ const errText = (err) => {
   return `${status ? status + ': ' : ''}${String(m).slice(0, 200)}`;
 };
 
-// keys that can be used right now, least-used today first (spreads the load)
+// tokens each key used in the last minute (RAM) - Groq limits tokens PER MINUTE, so the key that is
+// least busy right now goes first
+const recentTokens = new Map();
+function noteTokens(keyId, n) {
+  const a = (recentTokens.get(keyId) || []).filter(x => Date.now() - x.t < 60000); a.push({ t: Date.now(), n: n || 0 }); recentTokens.set(keyId, a);
+}
+const busy = (keyId) => (recentTokens.get(keyId) || []).filter(x => Date.now() - x.t < 60000).reduce((t, x) => t + x.n, 0);
+
+// keys that can be used right now, least busy first (spreads the load)
 async function usableKeys(onlyId) {
   const all = await ApiKey.find(onlyId ? { _id: onlyId } : { isActive: true });
   const now = Date.now(), t = today();
   return all
     .filter(k => onlyId || !k.exhaustedUntil || new Date(k.exhaustedUntil).getTime() <= now)
-    .sort((a, b) => (a.usageDay === t ? a.dailyUsageCount : 0) - (b.usageDay === t ? b.dailyUsageCount : 0) || Math.random() - 0.5);
+    .sort((a, b) => busy(String(a._id)) - busy(String(b._id)) || (a.usageDay === t ? a.dailyUsageCount : 0) - (b.usageDay === t ? b.dailyUsageCount : 0) || Math.random() - 0.5);
 }
 async function hasKeys() { return (await usableKeys()).length > 0; }
 
@@ -120,34 +142,55 @@ async function recordSuccess(k) {
 }
 async function recordFailure(k, kind, err) {
   const upd = { lastError: `${kind}: ${errText(err)}`, lastErrorAt: new Date() };
-  if (kind === 'quota' || kind === 'invalid') upd.exhaustedUntil = new Date(Date.now() + COOLDOWN[kind]);
+  if (kind === 'rate') upd.exhaustedUntil = new Date(Date.now() + Math.min(90000, Math.max(3000, (retryAfterMs(err) || COOLDOWN.rate) + 1500)));
+  else if (kind === 'quota') upd.exhaustedUntil = new Date(Date.now() + Math.min(3 * 3600 * 1000, retryAfterMs(err) || COOLDOWN.quota));
+  else if (kind === 'invalid') upd.exhaustedUntil = new Date(Date.now() + COOLDOWN.invalid);
   await ApiKey.findByIdAndUpdate(k._id, { $set: upd });
 }
 
 // Ask the AI. Tries each usable key in turn; a quota/invalid key is parked
 // and the SAME question is retried on the next key straight away.
 // Returns { ok: true, text, keyId } or { ok: false, reason, detail }.
-async function ask({ system, history = [], text, onlyKeyId, tools }) {
+async function ask({ system, history = [], text, onlyKeyId, tools, _retried }) {
   const keys = await usableKeys(onlyKeyId);
-  if (!keys.length) return { ok: false, reason: 'no_keys', detail: 'သုံးလို့ရတဲ့ API key မရှိပါ' };
-  let lastDetail = '';
+  if (!keys.length) {
+    // every key is only resting because of a per-minute limit? wait a few seconds once instead of failing the customer
+    const wait = await shortestRateWait();
+    if (!onlyKeyId && !_retried && wait > 0 && wait <= 12000) { await new Promise(r => setTimeout(r, wait + 300)); return ask({ system, history, text, onlyKeyId, tools, _retried: true }); }
+    return { ok: false, reason: 'no_keys', detail: 'သုံးလို့ရတဲ့ API key မရှိပါ (limit ကြောင့် ခေတ္တနားနေသည်)' };
+  }
+  let lastDetail = '', sawRate = false;
   for (const k of keys.slice(0, 5)) {
     let apiKey;
     try { apiKey = decrypt(k.encryptedKey); }
     catch (_) { await recordFailure(k, 'invalid', new Error('key ကို decrypt မလုပ်နိုင်ပါ (AI_KEY_SECRET / BOT_TOKEN ပြောင်းသွားသလား)')); lastDetail = 'decrypt failed'; continue; }
     try {
       const out = await callProvider(k.provider, apiKey, { system, history, text, tools });
+      noteTokens(String(k._id), out.tokens);
       await recordSuccess(k);
-      return { ok: true, text: out, keyId: String(k._id), provider: k.provider };
+      return { ok: true, text: out.text, keyId: String(k._id), provider: k.provider };
     } catch (err) {
       const kind = classify(err);
+      if (kind === 'rate') sawRate = true;
       lastDetail = `${k.provider}${k.label ? ' (' + k.label + ')' : ''}: ${errText(err)}`;
       console.error(`AI key failed [${k.provider} …${k.last4}]: ${kind}`);
       await recordFailure(k, kind, err);
       if (kind === 'empty') return { ok: false, reason: 'empty', detail: lastDetail }; // same answer would come from any key
     }
   }
+  // all keys hit a per-minute limit at once: wait for the soonest one and try one more time
+  if (sawRate && !onlyKeyId && !_retried) {
+    const wait = await shortestRateWait();
+    if (wait > 0 && wait <= 12000) { await new Promise(r => setTimeout(r, wait + 300)); return ask({ system, history, text, onlyKeyId, tools, _retried: true }); }
+  }
   return { ok: false, reason: 'all_failed', detail: lastDetail };
+}
+// ms until the soonest active key is usable again (only when that is a short rest); 0 if unknown
+async function shortestRateWait() {
+  const all = await ApiKey.find({ isActive: true });
+  const now = Date.now();
+  const waits = all.map(k => k.exhaustedUntil ? new Date(k.exhaustedUntil).getTime() - now : 0).filter(w => w > 0);
+  return waits.length ? Math.min(...waits) : 0;
 }
 
 // ---- per-user daily limit -------------------------------------------------
@@ -164,12 +207,15 @@ const memory = new Map();
 function getHistory(userId) {
   const m = memory.get(String(userId));
   if (!m || Date.now() - m.at > 30 * 60 * 1000) return [];
-  return m.turns.slice(-Math.max(0, Math.floor(num('ai_history_turns', 6))) * 2);
+  return m.turns.slice(-Math.max(0, Math.floor(num('ai_history_turns', 4))) * 2).map(t => ({ role: t.role, text: String(t.text).slice(0, 500) }));
 }
 function remember(userId, user, assistant) {
   const key = String(userId);
   const m = memory.get(key) && Date.now() - memory.get(key).at < 30 * 60 * 1000 ? memory.get(key) : { turns: [] };
-  m.turns.push({ role: 'user', text: user }, { role: 'assistant', text: assistant });
+  // assistant may be null when the AI could not answer: the customer's message is still kept, so the next
+  // answer (maybe from another key) knows what was asked
+  m.turns.push({ role: 'user', text: user });
+  if (assistant) m.turns.push({ role: 'assistant', text: assistant });
   m.turns = m.turns.slice(-24); m.at = Date.now();
   memory.set(key, m);
   if (memory.size > 5000) for (const [k, v] of memory) if (Date.now() - v.at > 30 * 60 * 1000) memory.delete(k);
@@ -236,7 +282,10 @@ async function chat({ userId, name, username, balance, text, tools, draftNote })
   if (res.ok && leaks(res.text, texts.t('ai_system_prompt', vars))) { console.error(`AI guard: blocked a leaking reply to ${userId}`); res.text = BLOCKED_REPLY; }
   if (res.ok) { remember(userId, text, res.text); rec(res.text, { provider: res.provider, blocked: res.text === BLOCKED_REPLY }); }
   // the AI never answered (all keys down) - do not charge the customer a question
-  else if (lim.used) await AiUsage.findOneAndUpdate({ _id: `${userId}:${today()}` }, { $inc: { count: -1 } });
+  else {
+    remember(userId, text, null);
+    if (lim.used) await AiUsage.findOneAndUpdate({ _id: `${userId}:${today()}` }, { $inc: { count: -1 } });
+  }
   return res;
 }
 

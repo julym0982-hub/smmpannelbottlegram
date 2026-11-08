@@ -60,22 +60,21 @@ const tool = (name, description, properties = {}, required = []) => ({
   type: 'function', function: { name, description, parameters: { type: 'object', properties, required } }
 });
 
+// English on purpose: Burmese text costs 3-4x more tokens, and Groq limits tokens per minute
 const DEFINITIONS = [
-  tool('list_platforms', 'ဆိုင်မှာ ရှိတဲ့ platform (Telegram/TikTok/Facebook...) တွေနဲ့ ၎င်းတို့ရဲ့ category နာမည်တွေ စာရင်း။ ဘာရှိလဲ မသေချာရင် ဒါကို အရင်ခေါ်။'),
-  tool('find_services', 'Service ရှာ။ query ထဲ platform/category/service နာမည်ထဲက စကားလုံးတွေ (အင်္ဂလိပ်လည်း ရ၊ ဥပမာ "tiktok like") ထည့်။ ဈေး (၁၀၀၀ အတွက်)၊ min/max၊ ကြာချိန်၊ refill ပါ/မပါ ပြန်ပေး။',
-    { query: { type: 'string', description: 'ရှာမယ့် စကားလုံးများ' } }, ['query']),
-  tool('order_draft', 'ဖောက်သည်ရဲ့ Order မူကြမ်း (draft) ကို ထည့်/ပြင်/ကြည့်။ ရှိတဲ့အချက်တွေကိုပဲ ပို့ (ဘာမှမပို့ရင် လက်ရှိ draft ကိုကြည့်)။ ဈေး၊ လက်ကျန်ငွေ အလုံအလောက်ရှိမရှိ၊ ဘာလိုသေးလဲ (status) ကို server က ပြန်ပေး။ Order ကို တကယ်မတင်ပါ၊ ပြီးရင် ဖောက်သည်က အတည်ပြုခလုတ် နှိပ်ရမယ်။',
+  tool('list_platforms', 'List shop platforms and their categories. Call when unsure what exists.'),
+  tool('find_services', 'Search services by keywords (English ok, e.g. "tiktok like"). Returns id, price per 1000 (kyat), min/max, duration, refill.',
+    { query: { type: 'string' } }, ['query']),
+  tool('order_draft', 'View/update the customer order draft. Send only the fields you have (none = just view). Server returns status, cost, balance. Does NOT place the order; customer must tap a confirm button.',
     {
-      service_id: { type: 'string', description: 'find_services က ရတဲ့ service_id (၂၄ လုံး)' },
-      quantity: { type: 'integer', description: 'တိုးချင်တဲ့ အရေအတွက်' },
-      link: { type: 'string', description: 'ဖောက်သည် ပို့တဲ့ link' },
-      clear: { type: 'boolean', description: 'draft ကို အကုန်ဖျက်ပြီး အသစ်ပြန်စ' }
+      service_id: { type: 'string', description: 'id from find_services' },
+      quantity: { type: 'integer' },
+      link: { type: 'string' },
+      clear: { type: 'boolean', description: 'reset draft' }
     }),
-  tool('my_balance', 'ဖောက်သည်ရဲ့ လက်ကျန်ငွေ (ကျပ်)'),
-  tool('my_orders', 'ဖောက်သည်ရဲ့ နောက်ဆုံး order များ (order_no၊ service၊ အရေအတွက်၊ status၊ ကျန်တာ)',
-    { limit: { type: 'integer', description: '၁ မှ ၈' } }),
-  tool('order_status', 'ဖောက်သည်ရဲ့ order တစ်ခု (order_no နဲ့) status ကြည့်',
-    { order_no: { type: 'integer', description: 'Order ID နံပါတ်' } }, ['order_no'])
+  tool('my_balance', "Customer's balance in kyat"),
+  tool('my_orders', "Customer's latest orders", { limit: { type: 'integer', description: '1-8' } }),
+  tool('order_status', "Status of one of the customer's orders", { order_no: { type: 'integer' } }, ['order_no'])
 ];
 
 function create({ priceFor }) {
@@ -90,24 +89,24 @@ function create({ priceFor }) {
       out.set(r.platformKey, e);
     }
     return {
-      platforms: [...out.values()].map(e => ({ platform: e.platform, categories: [...e.categories].map(([name, n]) => `${name} (${n} ခု)`) })),
-      note: platforms.length ? undefined : 'service မရှိသေးပါ'
+      platforms: [...out.values()].map(e => ({ platform: e.platform, categories: [...e.categories].map(([name, n]) => `${name} (${n})`) })),
+      note: platforms.length ? undefined : 'no services yet'
     };
   }
 
   async function findServices(args, ctx) {
     const q = String(args.query || '').toLowerCase().trim().slice(0, 100);
-    if (!q) return { error: 'query လိုအပ်တယ်၊ platform ကြည့်ချင်ရင် list_platforms ကိုသုံး' };
+    if (!q) return { error: 'query required; use list_platforms to browse' };
     const tokens = q.split(/\s+/).filter(Boolean).slice(0, 6);
     const { rows } = await loadCatalog();
     const hay = (r) => `${r.platformLabel} ${r.platformKey} ${r.categoryLabel} ${r.s.label}`.toLowerCase();
     let hits = rows.filter(r => { const h = hay(r); return tokens.every(t => h.includes(t)); });
     let loose = false;
     if (!hits.length) { hits = rows.filter(r => { const h = hay(r); return tokens.some(t => h.includes(t)); }); loose = hits.length > 0; }
-    if (!hits.length) return { results: [], note: 'မတွေ့ပါ - list_platforms နဲ့ ရှိတာကို ကြည့်ပါ' };
+    if (!hits.length) return { results: [], note: 'no match; try list_platforms' };
     return {
       total: hits.length,
-      note: loose ? 'စကားလုံးအားလုံး မကိုက်ပါ၊ တစ်စိတ်တစ်ပိုင်း ကိုက်တာတွေပါ' : undefined,
+      note: loose ? 'partial matches only' : undefined,
       results: hits.slice(0, MAX_FIND).map(r => publicService(ctx.user, r, priceFor))
     };
   }
@@ -119,20 +118,20 @@ function create({ priceFor }) {
 
     if (args.service_id !== undefined && args.service_id !== null && args.service_id !== '') {
       const id = String(args.service_id).trim();
-      if (!/^[0-9a-f]{24}$/i.test(id)) return { error: 'service_id မမှန်ပါ - find_services က ရတဲ့ id ကိုပဲသုံး' };
+      if (!/^[0-9a-f]{24}$/i.test(id)) return { error: 'bad service_id; use an id from find_services' };
       const { rows } = await loadCatalog();
       const row = rows.find(r => String(r.s._id) === id);
-      if (!row) return { error: 'ဒီ service မတွေ့ပါ (ပိတ်ထားနိုင်တယ်) - find_services နဲ့ ပြန်ရှာ' };
+      if (!row) return { error: 'service not found (maybe disabled); search again' };
       d.serviceId = id;
     }
     if (args.quantity !== undefined && args.quantity !== null) {
       const n = Number(args.quantity);
-      if (!Number.isInteger(n) || n <= 0) return { error: 'quantity က ၁ နဲ့အထက် ဂဏန်းပြည့် ဖြစ်ရမယ်' };
+      if (!Number.isInteger(n) || n <= 0) return { error: 'quantity must be a positive integer' };
       d.quantity = n;
     }
     if (args.link !== undefined && args.link !== null && args.link !== '') {
       const l = String(args.link).trim();
-      if (!linkOk(l)) return { error: 'link မမှန်ပါ (http/https နဲ့စ၊ space မပါရ) - ဖောက်သည်ကို link အမှန်ပြန်တောင်း' };
+      if (!linkOk(l)) return { error: 'invalid link (needs http/https, no spaces); ask the customer for a correct link' };
       d.link = l;
     }
 
@@ -140,10 +139,10 @@ function create({ priceFor }) {
     if (d.serviceId) {
       const { rows } = await loadCatalog();
       row = rows.find(r => String(r.s._id) === d.serviceId) || null;
-      if (!row) { delete d.serviceId; notes.push('service မရှိတော့ပါ'); }
+      if (!row) { delete d.serviceId; notes.push('service no longer available'); }
     }
     if (row && d.quantity && (d.quantity < row.s.min || d.quantity > row.s.max)) {
-      notes.push(`quantity က ${row.s.min} နဲ့ ${row.s.max} ကြား ဖြစ်ရမယ် (ထည့်ခဲ့တာ ${d.quantity})`);
+      notes.push(`quantity must be between ${row.s.min} and ${row.s.max} (got ${d.quantity})`);
       delete d.quantity;
     }
 
@@ -152,7 +151,7 @@ function create({ priceFor }) {
     let cost = null, enough = null;
     if (row && d.quantity) {
       try { cost = priceFor(user, row.s, d.quantity); } catch (_) { cost = null; }
-      if (!Number.isFinite(cost) || cost <= 0) { cost = null; notes.push('ဈေးတွက်လို့မရပါ - Admin ကို ဆက်သွယ်ခိုင်း'); }
+      if (!Number.isFinite(cost) || cost <= 0) { cost = null; notes.push('price unavailable; tell customer to contact admin'); }
       else enough = balance >= cost;
     }
 
@@ -189,12 +188,12 @@ function create({ priceFor }) {
       cost_kyat: cost, balance_kyat: balance, enough_balance: enough,
       notes: notes.length ? notes : undefined,
       instruction: ({
-        need_service: 'ဘယ် service လဲ ရွေးခိုင်း (find_services)',
-        need_quantity: 'အရေအတွက် မေး',
-        price_unavailable: 'ဈေးမတွက်နိုင်၊ Admin ဆက်သွယ်ခိုင်း',
-        need_topup: 'လက်ကျန်ငွေ မလောက်ဘူး၊ ငွေဖြည့်ဖို့ ပြော (ငွေဖြည့်ခလုတ်ကို bot က တွဲပေးမယ်)',
-        need_link: 'link ပို့ခိုင်း',
-        ready_for_confirm: 'bot က ကျသင့်ငွေနဲ့ အတည်ပြုခလုတ်ကို ပို့ပေးမယ်။ မင်းက စာတိုလေးပဲ ပြော၊ ငွေပမာဏ ထပ်မရေးနဲ့၊ Order တင်ပြီးပြီလို့ မပြောနဲ့'
+        need_service: 'ask which service (use find_services)',
+        need_quantity: 'ask quantity',
+        price_unavailable: 'cannot price; tell customer to contact admin',
+        need_topup: 'balance too low: say so politely with cost_kyat and balance_kyat, ask to top up (bot attaches the top-up button)',
+        need_link: 'ask for the link (must be public)',
+        ready_for_confirm: 'bot sends cost + confirm button. Say one short line to tap it. Do not repeat the price. Never say the order is placed.'
       })[status]
     };
   }
@@ -213,14 +212,14 @@ function create({ priceFor }) {
   async function myOrders(args, ctx) {
     const limit = Math.min(8, Math.max(1, parseInt(args.limit, 10) || 5));
     const list = await Order.find({ userId: ctx.userId }).sort({ createdAt: -1 }).limit(limit).lean();
-    return { orders: list.map(mapOrder), note: list.length ? 'status က မိနစ်အနည်းငယ်ခြားပြီး update ဖြစ်တယ်' : 'order မရှိသေးပါ' };
+    return { orders: list.map(mapOrder), note: list.length ? 'status refreshes every few minutes' : 'no orders yet' };
   }
 
   async function orderStatus(args, ctx) {
     const no = parseInt(args.order_no, 10);
-    if (!Number.isInteger(no)) return { error: 'order_no မမှန်ပါ' };
+    if (!Number.isInteger(no)) return { error: 'bad order_no' };
     const o = await Order.findOne({ orderNo: no, userId: ctx.userId }).lean(); // userId from Telegram: only OWN orders
-    if (!o) return { error: 'ဒီ Order ID မတွေ့ပါ' };
+    if (!o) return { error: 'order not found' };
     return mapOrder(o);
   }
 
@@ -241,7 +240,7 @@ function create({ priceFor }) {
             return await fn(args && typeof args === 'object' ? args : {}, ctx);
           } catch (err) {
             console.error(`AI tool ${name} failed:`, err.message);
-            return { error: 'စနစ်အခက်အခဲ ဖြစ်နေပါတယ်' };
+            return { error: 'system error' };
           }
         }
       };
@@ -252,7 +251,7 @@ function create({ priceFor }) {
       if (!d || (!d.serviceId && !d.quantity && !d.link)) return '';
       let name = '';
       if (d.serviceId) { const { rows } = await loadCatalog(); const r = rows.find(x => String(x.s._id) === d.serviceId); if (r) name = `${r.categoryLabel} / ${r.s.label} (service_id ${d.serviceId})`; }
-      return `လက်ရှိ order draft: service=${name || 'မရွေးရသေး'}, quantity=${d.quantity || 'မရှိသေး'}, link=${d.link ? 'ရပြီး' : 'မရသေး'} (အသေးစိတ်ကို order_draft နဲ့ ပြန်စစ်)`;
+      return `Current order draft: service=${name || 'none yet'}, quantity=${d.quantity || 'none yet'}, link=${d.link ? 'received' : 'not yet'} (verify with order_draft)`;
     }
   };
 }
