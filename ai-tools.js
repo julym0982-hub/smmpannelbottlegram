@@ -50,6 +50,7 @@ function publicService(user, row, priceFor) {
     category: row.categoryLabel,
     name: s.label,
     price_per_1000_kyat: price,
+    cost_for_min_quantity_kyat: (() => { try { return priceFor(user, s, s.min); } catch (_) { return null; } })(),
     min: s.min, max: s.max,
     duration: durationOf(s),
     refill: s.refill === true ? true : (s.refill === false ? false : null)
@@ -72,6 +73,8 @@ const DEFINITIONS = [
       link: { type: 'string' },
       clear: { type: 'boolean', description: 'reset draft' }
     }),
+  tool('price_quote', 'Exact cost in kyat for a service + quantity (server calculated). ALWAYS use this (or order_draft) for any cost; never multiply yourself.',
+    { service_id: { type: 'string' }, quantity: { type: 'integer' } }, ['service_id', 'quantity']),
   tool('my_balance', "Customer's balance in kyat"),
   tool('my_orders', "Customer's latest orders", { limit: { type: 'integer', description: '1-8' } }),
   tool('order_status', "Status of one of the customer's orders", { order_no: { type: 'integer' } }, ['order_no'])
@@ -198,6 +201,21 @@ function create({ priceFor }) {
     };
   }
 
+  async function priceQuote(args, ctx) {
+    const id = String(args.service_id || '').trim();
+    const n = Number(args.quantity);
+    if (!/^[0-9a-f]{24}$/i.test(id)) return { error: 'bad service_id; use an id from find_services' };
+    if (!Number.isInteger(n) || n <= 0) return { error: 'quantity must be a positive integer' };
+    const { rows } = await loadCatalog();
+    const row = rows.find(r => String(r.s._id) === id);
+    if (!row) return { error: 'service not found' };
+    if (n < row.s.min || n > row.s.max) return { error: `quantity must be between ${row.s.min} and ${row.s.max}`, min: row.s.min, max: row.s.max };
+    let cost = null;
+    try { cost = priceFor(ctx.user, row.s, n); } catch (_) { /* null */ }
+    if (!Number.isFinite(cost)) return { error: 'price unavailable' };
+    return { name: row.s.label, quantity: n, cost_kyat: cost, balance_kyat: ctx.user ? ctx.user.balance : 0, enough_balance: ctx.user ? ctx.user.balance >= cost : false };
+  }
+
   async function myBalance(_args, ctx) {
     const u = await User.findById(ctx.userId).lean();
     return { balance_kyat: u ? u.balance : 0 };
@@ -223,21 +241,25 @@ function create({ priceFor }) {
     return mapOrder(o);
   }
 
-  const impl = { list_platforms: listPlatforms, find_services: findServices, order_draft: orderDraft, my_balance: myBalance, my_orders: myOrders, order_status: orderStatus };
+  const impl = { list_platforms: listPlatforms, find_services: findServices, order_draft: orderDraft, price_quote: priceQuote, my_balance: myBalance, my_orders: myOrders, order_status: orderStatus };
 
   return {
     definitions: DEFINITIONS,
     // a fresh context per customer message: ctx = { userId, session, effects }
     bind({ userId, session, effects }) {
       const ctx = { userId: String(userId), session, effects, user: null };
+      const log = []; // everything tools returned this turn: the only numbers the AI may quote as prices
       return {
         definitions: DEFINITIONS,
+        results: () => log,
         async run(name, args) {
           const fn = impl[name];
           if (!fn) return { error: 'unknown tool' };
           try {
             if (!ctx.user) ctx.user = await User.findById(ctx.userId).lean();
-            return await fn(args && typeof args === 'object' ? args : {}, ctx);
+            const out = await fn(args && typeof args === 'object' ? args : {}, ctx);
+            log.push(JSON.stringify(out));
+            return out;
           } catch (err) {
             console.error(`AI tool ${name} failed:`, err.message);
             return { error: 'system error' };

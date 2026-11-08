@@ -270,6 +270,21 @@ function leaks(out, prompt) {
   return false;
 }
 
+// ---- price guard -------------------------------------------------------
+// The model must never calculate prices itself (it multiplied a per-1000 price by the quantity and quoted
+// 57,510 instead of 58). Every number written next to "ကျပ်" must appear in a tool result, in the customer's
+// own message / recent history, or in the shop facts. Otherwise the answer is not sent.
+const toAscii = (t) => String(t).replace(/[၀-၉]/g, c => String('၀၁၂၃၄၅၆၇၈၉'.indexOf(c)));
+const numbersIn = (t) => (toAscii(t).replace(/(\d),(?=\d{3})/g, '$1').match(/\d+(?:\.\d+)?/g) || []).map(x => String(Number(x)));
+function unverifiedPrices(reply, allowedText) {
+  const allowed = new Set(numbersIn(allowedText));
+  const bad = [];
+  const re = /(\d[\d,]*(?:\.\d+)?)\s*(?:ကျပ်|kyat|MMK)|(?:ကျပ်|MMK)\s*(\d[\d,]*)/gi;
+  let m; const text = toAscii(reply);
+  while ((m = re.exec(text))) { const n = String(Number((m[1] || m[2]).replace(/,/g, ''))); if (!allowed.has(n)) bad.push(n); }
+  return bad;
+}
+
 // full customer chat turn: limit -> prompt -> AI (with failover) -> memory
 async function chat({ userId, name, username, balance, text, tools, draftNote }) {
   const rec = (reply, extra = {}) => chatlog.save({ userId, name, username, question: text, reply, ...extra });
@@ -277,8 +292,20 @@ async function chat({ userId, name, username, balance, text, tools, draftNote })
   const lim = await takeQuestion(userId);
   if (!lim.allowed) return { ok: false, reason: 'limit' };
   const vars = { name: safeName(name), balance: balance == null ? '' : balance };
+  const factsText = [await autoFacts(), texts.t('ai_knowledge', vars)].filter(Boolean).join('\n'); // numbers the shop itself states (min top-up ...)
   const system = buildSystem(vars, [await autoFacts(), draftNote].filter(Boolean).join('\n'));
-  const res = await ask({ system, history: getHistory(userId), text, tools });
+  const hist = getHistory(userId);
+  let res = await ask({ system, history: hist, text, tools });
+  if (res.ok && tools && tools.results) {
+    const allowed = () => [text, ...hist.map(h => h.text), factsText, ...tools.results()].join(' ');
+    let bad = unverifiedPrices(res.text, allowed());
+    if (bad.length) { // one correction round: tell the model, let it use price_quote / order_draft
+      console.error(`AI guard: unverified price(s) ${bad.join(',')} for ${userId} - retrying`);
+      const fix = await ask({ system: system + '\n\nIMPORTANT: your previous answer contained a price you calculated yourself (' + bad.join(', ') + '). Never calculate. Call price_quote or order_draft and only repeat the numbers they return. Do not mention this correction.', history: hist, text, tools });
+      if (fix.ok) { res = fix; bad = unverifiedPrices(res.text, allowed()); }
+      if (bad.length) res.text = 'ဈေးအတိအကျကို စနစ်ကနေ တွက်ပေးဖို့ ဘယ် service ကို ဘယ်လောက်တိုးချင်လဲ ထပ်ပြောပေးပါနော်ရှင့် 😊';
+    }
+  }
   if (res.ok && leaks(res.text, texts.t('ai_system_prompt', vars))) { console.error(`AI guard: blocked a leaking reply to ${userId}`); res.text = BLOCKED_REPLY; }
   if (res.ok) { remember(userId, text, res.text); rec(res.text, { provider: res.provider, blocked: res.text === BLOCKED_REPLY }); }
   // the AI never answered (all keys down) - do not charge the customer a question
