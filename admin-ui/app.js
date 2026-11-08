@@ -689,7 +689,7 @@
   }
 
   // ---- provider browser: search a provider's catalogue, tick, add ---------
-  const PROVIDERS = ['shweboost', 'hiroshi', 'secsers'];
+  const PROVIDERS = ['shweboost', 'hiroshi', 'secsers', 'morethanpanel'];
   async function providerBrowser(root, done) {
     const st = { provider: 'shweboost', q: '', category: '', page: 1, selected: new Map() };
     const head = h('div', { class: 'stack' });
@@ -723,11 +723,11 @@
       listBox.replaceChildren();
       if (!r.items.length) { listBox.appendChild(empty('မတွေ့ပါ')); return; }
       const card = h('div', { class: 'card' }, h('div', { class: 'list' }, r.items.map(it => {
-        const cb = h('input', { type: 'checkbox', checked: st.selected.has(it.service), disabled: it.added, onchange: () => { if (cb.checked) st.selected.set(it.service, it); else st.selected.delete(it.service); drawSel(); } });
+        const cb = h('input', { type: 'checkbox', checked: st.selected.has(it.service), disabled: it.added || it.supported === false, onchange: () => { if (cb.checked) st.selected.set(it.service, it); else st.selected.delete(it.service); drawSel(); } });
         const margin = it.salePer1000 != null && it.basePer1000 != null ? it.salePer1000 - it.basePer1000 : null;
         return h('label', { class: 'svc-row' + (it.added ? ' added' : '') }, cb,
           h('div', { class: 'grow' },
-            h('div', { style: 'font-weight:600' }, it.name, ' ', it.added ? h('span', { class: 'pill ok' }, 'ထည့်ပြီး') : null),
+            h('div', { style: 'font-weight:600' }, it.name, ' ', it.added ? h('span', { class: 'pill ok' }, 'ထည့်ပြီး') : null, it.supported === false ? h('span', { class: 'pill bad', title: 'Bot က Default type (link + quantity) ကိုပဲ ထောက်ပံ့သေးသည်' }, it.type + ' · မထောက်ပံ့သေး') : null),
             h('div', { class: 'muted small' }, `#${it.service} · ${it.category}`),
             h('div', { class: 'small', style: 'margin-top:2px' }, `$${it.rate}/1k · min ${fmt(it.min)} – max ${fmt(it.max)}`,
               it.salePer1000 != null ? ` · ရောင်းဈေး ${fmt(it.salePer1000)} ကျပ်/1k` : '',
