@@ -69,7 +69,7 @@ let lastTotpStep = 0;
 function totpCheck(code) {
   const c = String(code || '').replace(/\s/g, '');
   const step = Math.floor(Date.now() / 30000); let ok = false, used = 0;
-  for (const d of [-1, 0, 1]) {   // always evaluates all 3 windows (clock drift tolerance, constant work)
+  for (const d of [-2, -1, 0, 1, 2]) {   // always evaluates all 5 windows (+-60s clock drift tolerance, constant work)
     const s = step + d;
     if (crypto.timingSafeEqual(sha(hotp(TOTP_KEY, s)), sha(c)) && s > lastTotpStep) { ok = true; used = Math.max(used, s); }
   }
@@ -280,14 +280,17 @@ module.exports = function mountAdminPanel(app, deps) {
         if (f.until > Date.now()) for (const id of (deps.adminIds || [])) safeSend(id, `⚠️ Admin Panel login မှားနေပါတယ် (ip ${ip}) - ၁၅ မိနစ် ပိတ်လိုက်ပါပြီ။ မိမိမဟုတ်ရင် PANEL_PASSWORD ပြောင်းပါ။`);
         throw fail(401, message);
       };
+      // the ticket is tied to this browser (User-Agent), NOT the IP - mobile networks change IP between requests,
+      // which made the second step say "time is up" even though the password was right
+      const ticketBind = 'ua:' + String(req.headers['user-agent'] || '').slice(0, 200);
       const adminId = (deps.adminIds || [])[0];
       if (!adminId) throw fail(500, 'ADMIN_IDS မသတ်မှတ်ရသေးပါ။');
 
       if (typeof req.body.ticket === 'string') {
         // step 2: only the 6-digit code, tied to a ticket that step 1 handed out (5 minutes, this IP only)
         if (!TOTP_ON) throw fail(403, '2FA မဖွင့်ထားပါ။');
-        if (!readTicket(req.body.ticket, ip)) throw fail(401, 'အချိန်ကုန်သွားပါပြီ၊ Username/Password ကို ပြန်စပါ။');
-        if (!totpCheck(req.body.code)) await failNow('2FA code WRONG (step 2)', 'Code မှားနေပါသည်။');
+        if (!readTicket(req.body.ticket, ticketBind)) throw fail(401, 'အချိန်ကုန်သွားပါပြီ၊ Username/Password ကို ပြန်စပါ။');
+        if (!totpCheck(req.body.code)) await failNow('2FA code WRONG (step 2)', 'Code မှားနေပါသည်။ (Code တစ်ခုကို တစ်ခါပဲ သုံးလို့ရတယ်၊ app ထဲမှာ နောက်တစ်ခု ပြောင်းတဲ့အထိ စောင့်ပြီး ထပ်ထည့်ပါ)');
         failedLogins.delete(ip);
         return giveSession(adminId, 'password');
       }
@@ -301,7 +304,7 @@ module.exports = function mountAdminPanel(app, deps) {
         if (typeof req.body.code === 'string' && req.body.code) { // one-shot form (all three at once) still works
           if (!totpCheck(req.body.code)) await failNow('2FA code WRONG', 'Username / Password / 2FA code တစ်ခုခု မှားနေပါသည်။');
         } else {
-          return res.json({ ok: true, step: '2fa', ticket: makeTicket(ip) });
+          return res.json({ ok: true, step: '2fa', ticket: makeTicket(ticketBind) });
         }
       }
       failedLogins.delete(ip);
