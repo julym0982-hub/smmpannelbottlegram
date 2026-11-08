@@ -32,15 +32,16 @@ const num = (k, def) => { const n = Number(texts.t(k)); return Number.isFinite(n
 const enabled = () => texts.t('ai_enabled') === '1';
 
 // ---- provider calls ---------------------------------------------------
-async function callProvider(provider, apiKey, { system, history, text }) {
-  const temperature = num('ai_temperature', 0.8);
+async function callProvider(provider, apiKey, { system, history, text, tools }) {
+  // with tools the model should be steadier (fewer invented ids / numbers)
+  const temperature = tools ? Math.min(num('ai_temperature', 0.8), 0.5) : num('ai_temperature', 0.8);
   const maxTokens = Math.max(64, Math.floor(num('ai_max_tokens', 1024)));
   if (provider === 'gemini') {
     const model = texts.t('ai_model_gemini').trim();
     const contents = [...history.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] })), { role: 'user', parts: [{ text }] }];
     const { data } = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      { systemInstruction: { parts: [{ text: system }] }, contents, generationConfig: { temperature, maxOutputTokens: maxTokens } },
+      { systemInstruction: { parts: [{ text: tools ? system + '\n\n(အခုအချိန်မှာ tool မရနိုင်ပါ - လက်ကျန်ငွေ/order စစ်တာ၊ order မှာတာကို Menu ခလုတ်တွေကို ညွှန်ပါ။ ဈေးနှုန်း မမှန်းပါနဲ့။)' : system }] }, contents, generationConfig: { temperature, maxOutputTokens: maxTokens } },
       { timeout: 30000, headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey } }
     );
     const parts = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
@@ -51,16 +52,36 @@ async function callProvider(provider, apiKey, { system, history, text }) {
   if (provider === 'groq') {
     const model = texts.t('ai_model_groq').trim();
     const messages = [{ role: 'system', content: system }, ...history.map(m => ({ role: m.role, content: m.text })), { role: 'user', content: text }];
-    const body = { model, messages, temperature, max_tokens: maxTokens };
-    if (model.includes('gpt-oss')) body.reasoning_effort = 'low'; // reasoning model: keep it fast, don't burn max_tokens on thinking
-    const { data } = await axios.post(
+    const post = async (body) => (await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
       body,
       { timeout: 30000, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` } }
-    );
-    const out = data && data.choices && data.choices[0] && data.choices[0].message && String(data.choices[0].message.content || '').trim();
-    if (!out) throw Object.assign(new Error('empty reply'), { kind: 'empty' });
-    return out;
+    )).data;
+    const base = { model, temperature, max_tokens: maxTokens };
+    if (model.includes('gpt-oss')) base.reasoning_effort = 'low'; // reasoning model: keep it fast, don't burn max_tokens on thinking
+    if (tools) { base.tools = tools.definitions; base.tool_choice = 'auto'; }
+
+    // tool loop: model asks for a tool -> the server runs it (own data only) -> result goes back -> repeat (max 6 rounds)
+    for (let round = 0; round < 6; round++) {
+      const data = await post(Object.assign({ messages }, base));
+      const msg = data && data.choices && data.choices[0] && data.choices[0].message;
+      const calls = msg && Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+      if (tools && calls.length) {
+        messages.push({ role: 'assistant', content: msg.content || '', tool_calls: calls });
+        for (const c of calls.slice(0, 4)) {
+          let args = {};
+          try { args = JSON.parse(c.function && c.function.arguments || '{}'); } catch (_) { args = {}; }
+          const result = await tools.run(c.function && c.function.name, args);
+          messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(result).slice(0, 6000) });
+        }
+        continue;
+      }
+      const out = msg && String(msg.content || '').trim();
+      if (out) return out;
+      if (tools && round > 0) return 'ဟုတ်ကဲ့ရှင့် 😊'; // tools did the work (e.g. confirm button is sent by the bot) but the model said nothing
+      throw Object.assign(new Error('empty reply'), { kind: 'empty' });
+    }
+    throw Object.assign(new Error('too many tool rounds'), { kind: 'empty' });
   }
   throw new Error('unknown provider');
 }
@@ -106,7 +127,7 @@ async function recordFailure(k, kind, err) {
 // Ask the AI. Tries each usable key in turn; a quota/invalid key is parked
 // and the SAME question is retried on the next key straight away.
 // Returns { ok: true, text, keyId } or { ok: false, reason, detail }.
-async function ask({ system, history = [], text, onlyKeyId }) {
+async function ask({ system, history = [], text, onlyKeyId, tools }) {
   const keys = await usableKeys(onlyKeyId);
   if (!keys.length) return { ok: false, reason: 'no_keys', detail: 'သုံးလို့ရတဲ့ API key မရှိပါ' };
   let lastDetail = '';
@@ -115,7 +136,7 @@ async function ask({ system, history = [], text, onlyKeyId }) {
     try { apiKey = decrypt(k.encryptedKey); }
     catch (_) { await recordFailure(k, 'invalid', new Error('key ကို decrypt မလုပ်နိုင်ပါ (AI_KEY_SECRET / BOT_TOKEN ပြောင်းသွားသလား)')); lastDetail = 'decrypt failed'; continue; }
     try {
-      const out = await callProvider(k.provider, apiKey, { system, history, text });
+      const out = await callProvider(k.provider, apiKey, { system, history, text, tools });
       await recordSuccess(k);
       return { ok: true, text: out, keyId: String(k._id), provider: k.provider };
     } catch (err) {
@@ -204,14 +225,14 @@ function leaks(out, prompt) {
 }
 
 // full customer chat turn: limit -> prompt -> AI (with failover) -> memory
-async function chat({ userId, name, username, balance, text }) {
+async function chat({ userId, name, username, balance, text, tools, draftNote }) {
   const rec = (reply, extra = {}) => chatlog.save({ userId, name, username, question: text, reply, ...extra });
   if (ATTACK_RE.test(text)) { console.error(`AI guard: blocked suspicious message from ${userId}`); rec(BLOCKED_REPLY, { blocked: true }); return { ok: true, text: BLOCKED_REPLY }; }
   const lim = await takeQuestion(userId);
   if (!lim.allowed) return { ok: false, reason: 'limit' };
   const vars = { name: safeName(name), balance: balance == null ? '' : balance };
-  const system = buildSystem(vars, await autoFacts());
-  const res = await ask({ system, history: getHistory(userId), text });
+  const system = buildSystem(vars, [await autoFacts(), draftNote].filter(Boolean).join('\n'));
+  const res = await ask({ system, history: getHistory(userId), text, tools });
   if (res.ok && leaks(res.text, texts.t('ai_system_prompt', vars))) { console.error(`AI guard: blocked a leaking reply to ${userId}`); res.text = BLOCKED_REPLY; }
   if (res.ok) { remember(userId, text, res.text); rec(res.text, { provider: res.provider, blocked: res.text === BLOCKED_REPLY }); }
   // the AI never answered (all keys down) - do not charge the customer a question

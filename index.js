@@ -8,6 +8,7 @@ const texts = require('./texts');
 const mountAdminPanel = require('./admin');
 const retention = require('./retention');
 const ai = require('./ai');
+const aiTools = require('./ai-tools').create({ priceFor: (user, service, qty) => priceFor(user, service, qty) });
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -879,7 +880,7 @@ bot.on('text', async (ctx, next) => {
   if (isMenuButtonText(text)) return next();
 
   // free text while the customer is not inside a menu step -> AI assistant
-  if (s.level === 'root' && await aiReply(ctx, text)) return;
+  if ((s.level === 'root' || (s.level === 'confirm' && s.fromAi)) && await aiReply(ctx, text)) return;
   return next();
 });
 
@@ -891,10 +892,25 @@ let aiAlertAt = 0;
 async function aiReply(ctx, text) {
   if (!ai.enabled() || !(await ai.hasKeys())) return false; // not configured -> stay silent like before
   if (bot.telegram.sendChatAction) bot.telegram.sendChatAction(ctx.chat.id, 'typing').catch(() => {});
+  const sess = st(ctx.from.id);
+  const effects = { topup: false, confirm: null };
+  const tools = aiTools.bind({ userId: String(ctx.from.id), session: sess, effects });
   const res = await ai.chat({
-    userId: String(ctx.from.id), name: displayName(ctx.from), username: ctx.from.username || '', balance: ctx.dbUser ? ctx.dbUser.balance : null, text: text.slice(0, 1000)
+    userId: String(ctx.from.id), name: displayName(ctx.from), username: ctx.from.username || '', balance: ctx.dbUser ? ctx.dbUser.balance : null, text: text.slice(0, 1000),
+    tools, draftNote: await aiTools.draftNote(sess)
   });
-  if (res.ok) { await ctx.reply(res.text.slice(0, 4000)); return true; }
+  if (res.ok) {
+    // the AI only talks; money buttons are made by the bot itself with server-calculated numbers
+    await ctx.reply(res.text.slice(0, 4000), effects.topup ? Markup.inlineKeyboard([[Markup.button.callback('💰ငွေဖြည့်ရန်💰', 'go_topup')]]) : undefined);
+    if (effects.confirm) {
+      const c = effects.confirm;
+      await ctx.reply(
+        `🧾 ${c.categoryLabel} › ${c.serviceLabel}\n🔢 ${nf(c.quantity)}\n🔗 ${c.link.length > 80 ? c.link.slice(0, 77) + '...' : c.link}\n\n${texts.t('order_confirm', { cost: nf(c.cost) })}`,
+        Markup.inlineKeyboard([[Markup.button.callback('✅ ဝယ်ယူမည်', `ai_confirm_${c.nonce}`)]])
+      );
+    }
+    return true;
+  }
   if (res.reason === 'limit') { await ctx.reply(texts.t('ai_limit_msg')); return true; }
   console.error('AI reply failed:', res.reason);
   await ctx.reply(texts.t('ai_fallback'));
@@ -1060,7 +1076,7 @@ bot.action(/^editamt_(\d+)_(\d+)$/, async (ctx) => {
 // =======================================================================
 // Order placement confirmation
 // =======================================================================
-bot.action('place_order', async (ctx) => {
+async function handlePlaceOrder(ctx) {
   // claim the confirm step BEFORE any await, so a double tap can never place two orders
   const s = st(ctx.from.id);
   const wasConfirm = s.level === 'confirm';
@@ -1135,6 +1151,22 @@ bot.action('place_order', async (ctx) => {
     `${esc(texts.t('order_success', { cost: nf(paid) }))}\n\n🆔 Order ID: <code>${orderNo || '-'}</code>\n<i>(နှိပ်ရင် copy ကူးလို့ရပါတယ်၊ အကူအညီလိုရင် 🆘 Order အကူအညီ မှာ သုံးပါ)</i>`,
     { parse_mode: 'HTML', reply_markup: (await mainMenuKeyboard()).reply_markup }
   );
+}
+// (a card made by the AI chat has its own nonce button; the plain button must never fire for an AI-made draft)
+bot.action('place_order', async (ctx) => {
+  const s = st(ctx.from.id);
+  if (s.fromAi) return ctx.answerCbQuery('နောက်ဆုံးပို့တဲ့ ခလုတ်ကိုပဲ နှိပ်ပါ', { show_alert: true }).catch(() => {});
+  return handlePlaceOrder(ctx);
+});
+
+// confirm button made from an AI chat: only valid for the newest draft (nonce), so an old card can never charge a changed order
+bot.action(/^ai_confirm_([0-9a-f]{10})$/, async (ctx) => {
+  const s = st(ctx.from.id);
+  if (!(s.level === 'confirm' && s.fromAi && s.aiNonce === ctx.match[1])) {
+    return ctx.answerCbQuery('ဒီခလုတ် သက်တမ်းကုန်သွားပါပြီ၊ နောက်ဆုံးပို့တဲ့ ခလုတ်ကိုပဲ နှိပ်ပါ', { show_alert: true }).catch(() => {});
+  }
+  s.aiNonce = null; // single use
+  return handlePlaceOrder(ctx);
 });
 
 // =======================================================================
