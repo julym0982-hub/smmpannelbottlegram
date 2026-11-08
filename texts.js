@@ -21,6 +21,7 @@ const DEFAULTS = {
   order_complete: '${link} ဝယ်ယူထားတဲ့ ${service} type က complete ဖြစ်သွားပါပြီရှင့်\nဝယ်ယူမှုအတွက် ကျေးဇူးတင်ပါတယ်ရှင့် ❤️',
   order_cancel_success: '✅ Order ကို cancel လုပ်ပြီး cashback ${cost} ကျပ် ပြန်ထည့်ပေးလိုက်ပါပြီရှင့်',
   order_partial_refund: '⚠️ Order က တစ်စိတ်တစ်ပိုင်းသာ ပြီးမြောက်ခဲ့ပါတယ်ရှင့်။ မပြီးမြောက်ခဲ့တဲ့ ${remains} ခုအတွက် cashback ${amount} ကျပ် ပြန်ထည့်ပေးလိုက်ပါပြီ ❤️',
+  order_error_contact_admin: '⚠️ ယခု ဝန်ဆောင်မှုတွင် error ဖြစ်နေပါသည်ရှင့်။ သင့်ငွေ မနှုတ်ယူပါ။\nAdmin ကို ဆက်သွယ်ပေးပါနော် 🙏',
   order_cancel_fail: 'Order ဆောင်ရွက်လျက်ရှိပါတယ်ရှင့်၊ cancel လုပ်၍ မရတော့ပါ',
   topup_min_amount: process.env.TOPUP_MIN_AMOUNT || '1000', // plain number, not a template
   // provider pricing knobs - plain numbers, not templates. Changeable live
@@ -31,6 +32,8 @@ const DEFAULTS = {
   secsers_markup: process.env.SECSERS_MARKUP_MULTIPLIER || '1',
   hiroshi_usd_to_mmk: process.env.HIROSHI_USD_TO_MMK || '4400',
   hiroshi_markup: process.env.HIROSHI_MARKUP_MULTIPLIER || '2.3',
+  morethanpanel_usd_to_mmk: process.env.MORETHANPANEL_USD_TO_MMK || '4400',
+  morethanpanel_markup: process.env.MORETHANPANEL_MARKUP_MULTIPLIER || '2.3',
   low_balance_threshold: process.env.LOW_BALANCE_THRESHOLD || '5', // provider balance (USD) below which admins get a Telegram warning; 0 = off
   // ---- feature switches / retention (plain values, edited from the panel)
   help_enabled: '1', // 1 = "Order အကူအညီ" button visible to users, 0 = hidden

@@ -188,7 +188,7 @@ function safeName(n) {
 const ATTACK_RE = /(system\s*prompt|initial\s*prompt|ignore\s+(all\s+|the\s+)?(previous|above|prior)|disregard\s+(all\s+)?(previous|above)|developer\s*mode|jailbreak|\bDAN\b|reveal\s+(your|the)\s+(prompt|instructions)|admin\s*panel|adminlogin|panel2fa|PANEL_(PASSWORD|TOTP|PATH|USERNAME)|authenticator|BOT_TOKEN|api[\s_-]*key|prompt\s*(ကို|ပြ|ပေး)|ညွှန်ကြားချက်\s*(တွေ|များ)?\s*(ကို)?\s*(ပြ|မေ့|ကူးပေး))/i;
 const BLOCKED_REPLY = 'အဲဒါလေးတွေတော့ ပြောပြလို့ မရပါဘူးရှင့် 🙏 service ဝယ်တာ၊ ငွေဖြည့်တာ၊ order ကိစ္စတွေဆို ကူညီပေးပါ့မယ်နော်။';
 function secretValues() {
-  const names = ['BOT_TOKEN', 'MONGODB_URI', 'MONGODB_URI_AI', 'PANEL_PASSWORD', 'PANEL_SESSION_SECRET', 'PANEL_TOTP_SECRET', 'PANEL_USERNAME', 'AI_KEY_SECRET', 'SHWEBOOST_API_KEY', 'HIROSHI_API_KEY', 'SECSERS_API_KEY'];
+  const names = ['BOT_TOKEN', 'MONGODB_URI', 'MONGODB_URI_AI', 'PANEL_PASSWORD', 'PANEL_SESSION_SECRET', 'PANEL_TOTP_SECRET', 'PANEL_USERNAME', 'AI_KEY_SECRET', 'SHWEBOOST_API_KEY', 'HIROSHI_API_KEY', 'SECSERS_API_KEY', 'MORETHANPANEL_API_KEY'];
   return names.map(n => process.env[n]).filter(v => v && String(v).length >= 8).map(String);
 }
 const SECRET_PATTERNS = [/AIza[0-9A-Za-z_\-]{20,}/, /gsk_[A-Za-z0-9]{20,}/, /\b\d{8,10}:[A-Za-z0-9_\-]{30,}\b/, /mongodb(\+srv)?:\/\//i, /\/admin\/login\?token=/i];

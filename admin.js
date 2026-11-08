@@ -864,7 +864,7 @@ module.exports = function mountAdminPanel(app, deps) {
         try { sale = providers.calcSaleCost(p, rate, 1000); } catch (_) {}
         let base = null;
         try { base = providers.calcBaseCost(p, rate, 1000); } catch (_) {}
-        return { service: String(s.service), name: s.name, category: s.category || '', type: s.type || '', rate, min: Number(s.min), max: Number(s.max), refill: !!s.refill, cancel: !!s.cancel, salePer1000: sale, basePer1000: base, added: used.has(String(s.service)) };
+        return { service: String(s.service), name: s.name, category: s.category || '', type: s.type || '', supported: providers.isSupportedType(s.type), rate, min: Number(s.min), max: Number(s.max), refill: !!s.refill, cancel: !!s.cancel, salePer1000: sale, basePer1000: base, added: used.has(String(s.service)) };
       })
     });
   }));
@@ -899,11 +899,12 @@ module.exports = function mountAdminPanel(app, deps) {
       const sid = String(it.providerServiceId || '').trim();
       const info = map.get(sid);
       if (!info) { skipped.push({ id: sid, reason: 'provider ထဲ မတွေ့ပါ' }); continue; }
+      if (!providers.isSupportedType(info.type)) { skipped.push({ id: sid, reason: `type "${info.type}" ကို bot က မထောက်ပံ့သေးပါ (Default ပဲ)` }); continue; }
       if (await Service.exists({ categoryId: category._id, provider, providerServiceId: sid })) { skipped.push({ id: sid, reason: 'ဒီ category ထဲ ရှိပြီးသား' }); continue; }
       let label = str(typeof it.label === 'string' && it.label.trim() && it.label.trim() !== '-' ? it.label : info.name, 'Button label', { max: 80 });
       if (await Service.exists({ categoryId: category._id, label })) label = `${label} #${sid}`.slice(0, 80);
       const svc = await Service.create({
-        categoryId: category._id, label, provider, providerServiceId: sid, providerName: info.name,
+        categoryId: category._id, label, provider, providerServiceId: sid, providerName: info.name, serviceType: info.type || 'Default',
         rate: Number(info.rate), min: Number(info.min), max: Number(info.max),
         avgTime: info.average_time || info.averageTime || null,
         refill: typeof info.refill === 'boolean' ? info.refill : undefined, cancel: typeof info.cancel === 'boolean' ? info.cancel : undefined,

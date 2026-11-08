@@ -39,8 +39,40 @@ const CONFIG = {
       providerCostUSD *
       Number(texts.t('hiroshi_usd_to_mmk')) *
       Number(texts.t('hiroshi_markup'))
+  },
+  morethanpanel: {
+    // Endpoint confirmed from https://morethanpanel.com/api : POST /api/v2,
+    // `key` in the form body, all errors come back as {"error": "..."}
+    // (many with HTTP 200). The URL has a built-in default; only the key is required.
+    url: process.env.MORETHANPANEL_API_URL || 'https://morethanpanel.com/api/v2',
+    key: process.env.MORETHANPANEL_API_KEY,
+    currency: 'USD',
+    toSaleCost: (providerCostUSD) =>
+      providerCostUSD *
+      Number(texts.t('morethanpanel_usd_to_mmk')) *
+      Number(texts.t('morethanpanel_markup'))
   }
 };
+
+const PROVIDER_IDS = require('./provider-ids');
+
+// Error carrying a neutral category, so callers can react (tell the admin to
+// top up, tell the customer something friendly) without ever parsing - or
+// leaking - the supplier's own wording.
+class ProviderError extends Error {
+  constructor(message, code) { super(message); this.name = 'ProviderError'; this.code = code || 'OTHER'; }
+}
+function classifyProviderMessage(message) {
+  const m = String(message || '').toLowerCase();
+  if (/not enough funds|insufficient|low balance|no balance|not enough balance|balance/.test(m)) return 'INSUFFICIENT_FUNDS';
+  if (/invalid api key|api key|unauthor/.test(m)) return 'AUTH';
+  if (/cloudflare|challenge|blocked/.test(m)) return 'BLOCKED';
+  if (/incorrect service|service id|service .*not|unavailable/.test(m)) return 'SERVICE';
+  if (/quantity less|quantity more|minimal|maximum/.test(m)) return 'QUANTITY';
+  if (/timeout|timed out|econn|enotfound|network|redirect/.test(m)) return 'CONNECTION';
+  return 'OTHER';
+}
+function isFundsError(err) { return !!err && err.code === 'INSUFFICIENT_FUNDS'; }
 
 function cfg(provider) {
   const c = CONFIG[provider];
@@ -88,17 +120,20 @@ async function call(provider, params) {
       const status = err.response.status;
       const body = err.response.data;
       if (isCloudflareChallenge(status, body)) {
-        throw new Error(
+        throw new ProviderError(
           `${provider} API ကို Cloudflare က block လုပ်ထားပါတယ် (403 challenge page). ` +
           `HIROSHI_API_URL ကို website URL မဟုတ်ဘဲ provider ရဲ့ API documentation ထဲက API endpoint (/api/v2 စသည်) အတိအကျထားပါ၊ ` +
-          `မရသေးရင် Hiroshi support ဆီက server IP/API access whitelist တောင်းပါ။`
+          `မရသေးရင် provider support ဆီက server IP/API access whitelist တောင်းပါ။`,
+          'BLOCKED'
         );
       }
-      throw new Error(`${provider} API error ${status}: ${responsePreview(body)}`);
+      const code = status === 401 ? 'AUTH' : classifyProviderMessage(responsePreview(body));
+      throw new ProviderError(`${provider} API error ${status}: ${responsePreview(body)}`, code);
     }
     if (err.code === 'ERR_FR_TOO_MANY_REDIRECTS' || err.code === 'ERR_BAD_REQUEST') {
-      throw new Error(`${provider} API endpoint သည် API response မပေးဘဲ redirect လုပ်နေပါတယ်။ API endpoint URL ကို ပြန်စစ်ပါ။`);
+      throw new ProviderError(`${provider} API endpoint သည် API response မပေးဘဲ redirect လုပ်နေပါတယ်။ API endpoint URL ကို ပြန်စစ်ပါ။`, 'CONNECTION');
     }
+    if (!(err instanceof ProviderError)) err.code = err.code && /^E/.test(err.code) ? 'CONNECTION' : (err.code || 'CONNECTION');
     throw err;
   }
 }
@@ -132,6 +167,7 @@ async function fetchServiceInfo(provider, providerServiceId) {
     min: Number(found.min),
     max: Number(found.max),
     avgTime: rawTime ? String(rawTime).trim() : null,
+    type: found.type ? String(found.type) : 'Default',
     refill: typeof found.refill === 'boolean' ? found.refill : undefined,
     cancel: typeof found.cancel === 'boolean' ? found.cancel : undefined
   };
@@ -161,10 +197,20 @@ function calcBaseCost(provider, rate, quantity) {
   return Math.ceil((rate / 1000) * quantity * usdToMmk);
 }
 
-async function placeOrder(provider, providerServiceId, link, quantity) {
-  const res = await call(provider, { action: 'add', service: providerServiceId, link, quantity });
+// Services of type "Default" only need link + quantity - that is all the bot
+// collects from customers. Other types (Custom Comments, Usernames List,
+// Subscription, Poll ...) need extra fields the bot flow does not ask for yet.
+function isSupportedType(type) {
+  return !type || /^default$/i.test(String(type).trim());
+}
+
+async function placeOrder(provider, providerServiceId, link, quantity, extra) {
+  const res = await call(provider, Object.assign({ action: 'add', service: providerServiceId, link, quantity }, extra || {}));
   if (!res || (!res.order && res.order !== 0)) {
-    throw new Error((res && (res.error || JSON.stringify(res))) || 'Unknown error placing order');
+    // Perfect-Panel errors look like {"error":"Not enough funds on balance"}
+    // (often with HTTP 200), so classify the message into a neutral code.
+    const msg = (res && (res.error || JSON.stringify(res))) || 'Unknown error placing order';
+    throw new ProviderError(String(msg), classifyProviderMessage(msg));
   }
   return res.order;
 }
@@ -215,5 +261,6 @@ async function getBalance(provider) {
 }
 
 module.exports = {
+  PROVIDER_IDS, ProviderError, isFundsError, isSupportedType, classifyProviderMessage,
   CONFIG, listServices, fetchServiceInfo, calcSaleCost, calcBaseCost, placeOrder, orderStatus, orderStatusBulk, cancelOrder, refillOrder, refillStatus, getBalance, formatDuration
 };

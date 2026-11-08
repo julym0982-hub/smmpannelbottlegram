@@ -61,6 +61,27 @@ function logFailure(label, err) {
   console.error(`${label}: ${failureCode(err)}`);
 }
 
+// Tell ADMINS (never customers) which supplier failed and why, so they can
+// top up / fix the key. Throttled so a burst of failed orders sends one alert.
+const providerAlertAt = {};
+async function alertAdminsProviderProblem(provider, err, ctxInfo) {
+  const code = (err && err.code) || 'OTHER';
+  const key = provider + ':' + code;
+  if (Date.now() - (providerAlertAt[key] || 0) < 10 * 60 * 1000) return;
+  providerAlertAt[key] = Date.now();
+  const why = {
+    INSUFFICIENT_FUNDS: '💸 Provider balance မလောက်တော့ပါ - ငွေဖြည့်ပေးပါ',
+    AUTH: '🔑 API key မမှန်ပါ / ပြောင်းသွားပါပြီ - .env ထဲက key ကို စစ်ပါ',
+    BLOCKED: '🛡️ Provider ဘက်က block ထားပါတယ် (Cloudflare / IP)',
+    SERVICE: '🧩 Service id မရှိတော့ပါ / ပိတ်သွားပါပြီ - /syncservices လုပ်ပါ',
+    QUANTITY: '🔢 Quantity က provider ရဲ့ min/max နဲ့ မကိုက်ပါ - /syncservices လုပ်ပါ',
+    CONNECTION: '🌐 Provider နဲ့ ချိတ်ဆက်မရပါ'
+  }[code] || '❓ Provider က order ကို လက်မခံပါ';
+  const detail = String((err && err.message) || err).slice(0, 200);
+  const text = `⚠️ ${provider} order မအောင်မြင်ပါ\n${why}\n` + (ctxInfo ? `${ctxInfo}\n` : '') + `\nအသေးစိတ်: ${detail}\n(User ကို provider အမည်မပြပါ၊ ငွေပြန်အမ်းပြီးသား)`;
+  for (const id of ADMIN_IDS) await safeSend(id, text).catch(() => {});
+}
+
 // sale price for one order, including the user's personal reseller discount
 // (set from the admin panel). Always rounded UP so we never sell below cost.
 function priceFor(user, service, quantity) {
@@ -374,7 +395,7 @@ Home button ထဲကို service (ဥပမာ ♥️,👍 reaction emoji, �
 /syncservices - service အားလုံးရဲ့ rate/min/max ကို provider API မှ ပြန်ဆွဲ update လုပ်မည် (provider ဘက်က ဈေးနှုန်း ပြောင်းနိုင်လို့ ရံဖန်ရံခါ run ပေးရင် ကောင်းပါတယ်)
 
 **ဈေးနှုန်း formula ကို bot ထဲကနေ ချက်ချင်း ပြောင်းရန်** (Render env var ပြင်စရာ၊ redeploy လုပ်စရာ မလိုပါ):
-/setrate <shweboost|secsers|hiroshi> <USD→MMK rate> <markup>
+/setrate <shweboost|secsers|hiroshi|morethanpanel> <USD→MMK rate> <markup>
 ဥပမာ: /setrate shweboost 2100 2.3
    (ShweBoost က $1 ကို 2100 ကျပ်နှုန်းဖြင့် တွက်ပြီး 2.3 ဆ ထပ်မြှောက်မည် — ဆိုလိုသည်မှာ user ဆီ ပြမည့် ကျသင့်ငွေ = USD ကုန်ကျစရိတ် × 2100 × 2.3)
 ဥပမာ: /setrate secsers 4400 1
@@ -407,7 +428,7 @@ Home button ထဲကို service (ဥပမာ ♥️,👍 reaction emoji, �
 **Order management**:
 /checkorders - order အားလုံး (နောက်ဆုံး ၃၀ခု)
 /removeorder <orderMongoId> - order မှတ်တမ်းမှ ဖျက်ရန် (provider ဘက်က order ကို မထိပါ၊ database မှတ်တမ်းကိုပဲ ဖျက်တာပါ)
-/providerbalance - ShweBoost/Secsers account ထဲ ကျန်ရှိငွေ စစ်ရန်`,
+/providerbalance - Provider (ShweBoost/Secsers/Hiroshi/MoreThanPanel) account ထဲ ကျန်ရှိငွေ စစ်ရန်`,
 
 `👑 Admin Guide (၆/၇) — Message/Coupon/Custom menu button
 
@@ -792,12 +813,12 @@ bot.on('text', async (ctx, next) => {
   if (s.level === 'admin_addid_category' && isAdmin(ctx.from.id)) {
     s.newCategoryLabel = text;
     s.level = 'admin_addid_provider';
-    await ctx.reply('Provider ကို ရေးပါ: shweboost, secsers, hiroshi တစ်ခုခု');
+    await ctx.reply('Provider ကို ရေးပါ: ' + providers.PROVIDER_IDS.join(', ') + ' တစ်ခုခု');
     return;
   }
   if (s.level === 'admin_addid_provider' && isAdmin(ctx.from.id)) {
     const provider = text.toLowerCase();
-    if (!['shweboost', 'secsers', 'hiroshi'].includes(provider)) return ctx.reply('shweboost, secsers, hiroshi တစ်ခုခုကိုသာ ရေးပါ။');
+    if (!providers.PROVIDER_IDS.includes(provider)) return ctx.reply(providers.PROVIDER_IDS.join(', ') + ' တစ်ခုခုကိုသာ ရေးပါ။');
     s.newProvider = provider;
     s.level = 'admin_addid_serviceid';
     await ctx.reply(`${provider} ဝဘ်ဆိုက်ထဲက ဝယ်လိုသော service ရဲ့ provider service id ကို ရေးပါ`);
@@ -811,6 +832,7 @@ bot.on('text', async (ctx, next) => {
     } catch (err) {
       return ctx.reply('❌ ' + err.message);
     }
+    if (!providers.isSupportedType(info.type)) return ctx.reply(`❌ ဒီ service ရဲ့ type က "${info.type}" ဖြစ်ပါတယ်။ Bot က link + quantity သီးသန့် (Default type) ကိုပဲ ထောက်ပံ့ပါသေးတယ်၊ တခြား service id ရွေးပါ။`);
     s.newProviderServiceId = providerServiceId;
     s.newServiceInfo = info;
     s.level = 'admin_addid_label';
@@ -1074,6 +1096,13 @@ bot.action('place_order', async (ctx) => {
     await User.findByIdAndUpdate(uid, { $inc: { balance: s.cost, totalSpent: -s.cost } });
     resetState(ctx.from.id);
     logFailure('customer order submission failed', err);
+    // admin gets the real reason (with provider name); the customer never does
+    alertAdminsProviderProblem(service.provider, err, `Service: ${service.label} · qty ${s.quantity} · user ${uid}`).catch(() => {});
+    // supplier-side problems the customer cannot fix (no funds, bad key, blocked)
+    // -> plain "error, contact admin" message, no supplier details
+    if (providers.isFundsError(err) || ['AUTH', 'BLOCKED'].includes(err && err.code)) {
+      return ctx.reply(texts.t('order_error_contact_admin'), await mainMenuKeyboard());
+    }
     return ctx.reply(customerError('Order ကို လက်ခံဆောင်ရွက်နေစဉ် အခက်အခဲ ဖြစ်နေပါသည်။ ခဏနေပြီး ပြန်ကြိုးစားပေးပါရှင့်။'), await mainMenuKeyboard());
   }
 
@@ -1603,9 +1632,10 @@ async function addServiceQuick(platformKey, categoryLabel, buttonLabel, provider
   let category = await Category.findOne({ platform: platformKey, label: categoryLabel });
   if (!category) category = await Category.create({ platform: platformKey, label: categoryLabel });
   const info = await providers.fetchServiceInfo(provider, providerServiceId);
+  if (!providers.isSupportedType(info.type)) throw new Error(`ဒီ service ရဲ့ type က "${info.type}" ဖြစ်ပါတယ် - Bot က Default type (link + quantity) ကိုပဲ ထောက်ပံ့ပါသေးတယ်`);
   const label = buttonLabel === '-' ? info.providerName : buttonLabel;
   const service = await Service.create({
-    categoryId: category._id, label, provider, providerServiceId,
+    categoryId: category._id, label, provider, providerServiceId, serviceType: info.type,
     providerName: info.providerName, rate: info.rate, min: info.min, max: info.max,
     avgTime: info.avgTime, refill: info.refill, cancel: info.cancel, lastSynced: new Date()
   });
@@ -1627,8 +1657,8 @@ bot.command(['addbutton', 'addservice'], async (ctx) => {
     );
   }
   const [platformKey, categoryLabel, buttonLabel, provider, providerServiceId] = parts;
-  if (!['shweboost', 'secsers', 'hiroshi'].includes(provider.toLowerCase())) {
-    return ctx.reply('❌ provider ကို shweboost, secsers, hiroshi တစ်ခုခုကိုသာ ရေးပါ။');
+  if (!providers.PROVIDER_IDS.includes(provider.toLowerCase())) {
+    return ctx.reply('❌ provider ကို ' + providers.PROVIDER_IDS.join(', ') + ' တစ်ခုခုကိုသာ ရေးပါ။');
   }
   try {
     const { service, category, platform } = await addServiceQuick(
@@ -1759,7 +1789,7 @@ bot.command('syncservices', async (ctx) => {
 bot.command('providerbalance', async (ctx) => {
   if (!requireAdmin(ctx)) return;
   const lines = [];
-  for (const provider of ['shweboost', 'secsers', 'hiroshi']) {
+  for (const provider of providers.PROVIDER_IDS) {
     try {
       const res = await providers.getBalance(provider);
       lines.push(`${provider}: ${res.balance} ${res.currency || ''}`);
@@ -1862,15 +1892,17 @@ bot.command('setrate', async (ctx) => {
   const provider = (parts[1] || '').toLowerCase();
   const usdToMmk = parts[2];
   const markup = parts[3];
-  if (!['shweboost', 'secsers', 'hiroshi'].includes(provider) || !usdToMmk || !markup) {
+  if (!providers.PROVIDER_IDS.includes(provider) || !usdToMmk || !markup) {
     return ctx.reply(
-      'ပုံစံ: /setrate <shweboost|secsers|hiroshi> <USD→MMK rate> <markup>\n\n' +
+      'ပုံစံ: /setrate <shweboost|secsers|hiroshi|morethanpanel> <USD→MMK rate> <markup>\n\n' +
       'ဥပမာ (ShweBoost က $1 ကို 2100 ကျပ်နှုန်းဖြင့် တွက်ပြီး 2.3 ဆ markup တင်လိုရင်):\n' +
       '/setrate shweboost 2100 2.3\n\n' +
       'ဥပမာ (Secsers က $1=4400ကျပ်, markup မတင်လိုရင်):\n' +
       '/setrate secsers 4400 1\n\n' +
       'ဥပမာ (Hiroshi):\n' +
       '/setrate hiroshi 4400 2.3\n\n' +
+      'ဥပမာ (MoreThanPanel):\n' +
+      '/setrate morethanpanel 4400 2.3\n\n' +
       'ဖော်မြူလာ: ကျသင့်ငွေ = provider ရဲ့ USD ကုန်ကျစရိတ် × <USD→MMK rate> × <markup>'
     );
   }

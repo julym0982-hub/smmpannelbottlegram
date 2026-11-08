@@ -41,7 +41,7 @@ CategorySchema.index({ platform: 1, label: 1 });
 const ServiceSchema = new mongoose.Schema({
   categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true, index: true },
   label: { type: String, required: true },       // button text, e.g. "♥️" or "👍♥️🔥😁🎉 +Views"
-  provider: { type: String, enum: ['shweboost', 'secsers', 'hiroshi'], required: true },
+  provider: { type: String, enum: require('./provider-ids'), required: true },
   providerServiceId: { type: String, required: true },
   // cached from the provider's "services" API endpoint so we don't have to
   // call it on every single order (refreshed by /syncservices)
@@ -50,6 +50,7 @@ const ServiceSchema = new mongoose.Schema({
   min: Number,
   max: Number,
   avgTime: String,
+  serviceType: String, // provider's service type ("Default", "Custom Comments", ...) - the bot flow only supports Default
   refill: Boolean, // provider says this service can be refilled (from the provider's service list)
   cancel: Boolean, // provider says this service can be cancelled
   active: { type: Boolean, default: true }, // admin panel can hide a service without deleting it
