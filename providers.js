@@ -127,8 +127,10 @@ async function call(provider, params) {
           'BLOCKED'
         );
       }
-      const code = status === 401 ? 'AUTH' : classifyProviderMessage(responsePreview(body));
-      throw new ProviderError(`${provider} API error ${status}: ${responsePreview(body)}`, code);
+      // 5xx = the supplier's own server/gateway is down (e.g. Cloudflare 502/503/504 page), nothing we can fix
+      const code = status === 401 ? 'AUTH' : status >= 500 ? 'UPSTREAM' : classifyProviderMessage(responsePreview(body));
+      const looksHtml = /^\s*<(!doctype|html)/i.test(String(typeof body === 'string' ? body : ''));
+      throw new ProviderError(`${provider} API error ${status}: ${looksHtml ? '(HTML error page from provider)' : responsePreview(body)}`, code);
     }
     if (err.code === 'ERR_FR_TOO_MANY_REDIRECTS' || err.code === 'ERR_BAD_REQUEST') {
       throw new ProviderError(`${provider} API endpoint သည် API response မပေးဘဲ redirect လုပ်နေပါတယ်။ API endpoint URL ကို ပြန်စစ်ပါ။`, 'CONNECTION');

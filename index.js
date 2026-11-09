@@ -76,7 +76,8 @@ async function alertAdminsProviderProblem(provider, err, ctxInfo) {
     BLOCKED: '🛡️ Provider ဘက်က block ထားပါတယ် (Cloudflare / IP)',
     SERVICE: '🧩 Service id မရှိတော့ပါ / ပိတ်သွားပါပြီ - /syncservices လုပ်ပါ',
     QUANTITY: '🔢 Quantity က provider ရဲ့ min/max နဲ့ မကိုက်ပါ - /syncservices လုပ်ပါ',
-    CONNECTION: '🌐 Provider နဲ့ ချိတ်ဆက်မရပါ'
+    CONNECTION: '🌐 Provider နဲ့ ချိတ်ဆက်မရပါ',
+    UPSTREAM: '🛠️ Provider ရဲ့ server ယာယီ ပျက်နေပါတယ် (502/503) - သူတို့ပြန်ကောင်းရင် ရပါပြီ၊ ၅–၃၀ မိနစ်နေ ပြန်စမ်းပါ၊ မကောင်းသေးရင် provider support ကို အကြောင်းကြားပါ'
   }[code] || '❓ Provider က order ကို လက်မခံပါ';
   const detail = String((err && err.message) || err).slice(0, 200);
   const text = `⚠️ ${provider} order မအောင်မြင်ပါ\n${why}\n` + (ctxInfo ? `${ctxInfo}\n` : '') + `\nအသေးစိတ်: ${detail}\n(User ကို provider အမည်မပြပါ၊ ငွေပြန်အမ်းပြီးသား)`;
@@ -1116,7 +1117,7 @@ async function handlePlaceOrder(ctx) {
     alertAdminsProviderProblem(service.provider, err, `Service: ${service.label} · qty ${s.quantity} · user ${uid}`).catch(() => {});
     // supplier-side problems the customer cannot fix (no funds, bad key, blocked)
     // -> plain "error, contact admin" message, no supplier details
-    if (providers.isFundsError(err) || ['AUTH', 'BLOCKED'].includes(err && err.code)) {
+    if (providers.isFundsError(err) || ['AUTH', 'BLOCKED', 'UPSTREAM'].includes(err && err.code)) {
       return ctx.reply(texts.t('order_error_contact_admin'), await mainMenuKeyboard());
     }
     return ctx.reply(customerError('Order ကို လက်ခံဆောင်ရွက်နေစဉ် အခက်အခဲ ဖြစ်နေပါသည်။ ခဏနေပြီး ပြန်ကြိုးစားပေးပါရှင့်။'), await mainMenuKeyboard());
