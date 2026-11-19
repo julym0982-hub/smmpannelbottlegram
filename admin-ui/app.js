@@ -444,7 +444,19 @@
     const tabs = h('div', { class: 'chips', style: 'margin-bottom:12px' });
     const TABS = [['pending', 'စောင့်ဆိုင်းဆဲ'], ['approved', 'လက်ခံပြီး'], ['rejected', 'ပယ်ချပြီး'], ['', 'အားလုံး']];
     function drawTabs() { tabs.replaceChildren(...TABS.map(([k, label]) => h('button', { class: 'chip' + (status === k ? ' on' : ''), onclick: () => { status = k; page = 1; drawTabs(); load(); } }, label, k === 'pending' && state.pending ? h('span', { class: 'n' }, state.pending) : null))); }
-    view.append(tabs, list);
+    // bulk clean-up of closed top-up records (balances are never touched)
+    const cStatus = h('select', {}, h('option', { value: 'all' }, 'လက်ခံပြီး + ပယ်ချပြီး'), h('option', { value: 'approved' }, 'လက်ခံပြီး သက်သက်'), h('option', { value: 'rejected' }, 'ပယ်ချပြီး သက်သက်'));
+    const cDays = h('input', { type: 'number', value: '0', min: 0, max: 3650, inputmode: 'numeric' });
+    const cInfo = h('div', { class: 'small' });
+    const cleanBox = h('details', { class: 'card' }, h('summary', { style: 'cursor:pointer' }, '🧹 ငွေဖြည့်မှတ်တမ်းဟောင်းတွေ Database ထဲက ဖျက်ရန်'),
+      h('div', { class: 'stack', style: 'margin-top:10px' },
+        h('div', { class: 'muted small' }, 'စောင့်ဆိုင်းဆဲ (pending) တွေကို လုံးဝ မဖျက်ပါ။ User တွေရဲ့ လက်ကျန်ငွေ မပြောင်းပါ - မှတ်တမ်းပဲ ပျောက်ပါမယ်။'),
+        field('ဘယ်မှတ်တမ်းတွေ', cStatus), field('ဒီရက်ထက် ဟောင်းတာတွေပဲ (0 = ရက်မရွေး အကုန်)', cDays),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn grow', onclick: (e) => busy(e.target, async () => { const r = await POST('/deposits/cleanup', { status: cStatus.value, olderThanDays: cDays.value, dryRun: true }); cInfo.textContent = `ကြိုကြည့်: မှတ်တမ်း ${fmt(r.count)} ခု ဖျက်ဖြစ်ပါမယ်`; }) }, 'ကြိုကြည့်မည်'),
+          h('button', { class: 'btn danger grow', onclick: async (e) => { if (await confirmBox('အုပ်စုလိုက် ဖျက်မည်', 'ရွေးထားတဲ့ ငွေဖြည့်မှတ်တမ်းတွေကို Database ထဲက ဖျက်မှာ သေချာပါသလား? (ပြန်မရပါ)', 'ဖျက်မည်', true)) busy(e.target, async () => { const r = await POST('/deposits/cleanup', { status: cStatus.value, olderThanDays: cDays.value, dryRun: false }); cInfo.textContent = `ဖျက်ပြီး: ${fmt(r.count)} ခု`; toast('ဖျက်ပြီး ✅', 'ok'); load(); }); } }, 'ဖျက်မည်')),
+        cInfo));
+    view.append(tabs, list, cleanBox);
     drawTabs();
 
     async function load() {
@@ -476,7 +488,8 @@
           h('div', { class: 'muted small' }, `ID ${d.userId}${d.username ? ' · @' + d.username : ''}`),
           h('div', { class: 'muted small' }, `${d.method || '-'} · ${dt(d.createdAt)} (${ago(d.createdAt)})`)),
         h('div', { class: 'right' }, h('div', { class: 'big' }, fmt(d.amount)), d.requestedAmount && d.requestedAmount !== d.amount ? h('div', { class: 'small muted' }, 'မူရင်း ' + fmt(d.requestedAmount)) : h('div', { class: 'small muted' }, 'ကျပ်'))),
-      !pending ? h('div', { class: 'small muted', style: 'margin-top:8px' }, `${d.handledBy === 'panel' ? 'Panel' : (d.handledBy || '').replace('bot:', 'Telegram Admin ')} · ${dt(d.handledAt)}${d.note ? ' · ' + d.note : ''}`) : null,
+      !pending ? h('div', { class: 'row nowrap', style: 'margin-top:8px' }, h('div', { class: 'small muted grow' }, `${d.handledBy === 'panel' ? 'Panel' : (d.handledBy || '').replace('bot:', 'Telegram Admin ')} · ${dt(d.handledAt)}${d.note ? ' · ' + d.note : ''}`),
+        h('button', { class: 'btn sm danger', title: 'Database ထဲက ဖျက်မည်', onclick: async () => { if (await confirmBox('မှတ်တမ်း ဖျက်မည်', `${d.userName} ၏ ${fmt(d.amount)} ကျပ် မှတ်တမ်းကို Database ထဲကနေ ဖျက်မှာ သေချာပါသလား? (User ရဲ့ လက်ကျန်ငွေကို မထိပါ၊ ပြန်မရပါ)`, 'ဖျက်မည်', true)) { try { await DEL('/deposits/' + d.id); toast('ဖျက်ပြီး', 'ok'); reload(); } catch (e) { fail(e); } } } }, '🗑')) : null,
       pending ? h('div', { class: 'row', style: 'margin-top:12px' },
         h('button', { class: 'btn ok grow', onclick: (e) => act(e.target, () => POST(`/deposits/${d.id}/approve`), `✅ ${fmt(d.amount)} ကျပ် ထည့်ပြီး`) }, '✅ Accept'),
         h('button', { class: 'btn', onclick: async (e) => {
@@ -1231,6 +1244,7 @@
       const autoSw = sw(f.history_auto !== '0', () => {});
       const days = h('input', { type: 'number', value: f.history_keep_days, min: 1, max: 365, inputmode: 'numeric' });
       const last = h('input', { type: 'number', value: f.history_keep_last, min: 0, max: 365, inputmode: 'numeric' });
+      const tgDays = h('input', { type: 'number', value: f.tgacc_keep_days, min: 0, max: 365, inputmode: 'numeric' });
       const info = h('div', { class: 'small muted' }, 'Loading...');
       const result = h('div', { class: 'small' });
       body.appendChild(h('div', { class: 'card' }, h('h2', {}, '🧹 History ရှင်းလင်းခြင်း (MongoDB နေရာမပြည့်အောင်)'),
@@ -1240,17 +1254,19 @@
           h('label', { class: 'row nowrap' }, autoSw, h('span', {}, 'နေ့စဉ် အလိုအလျောက် ရှင်းမည်')),
           field('ဘယ်နှရက်ထက် ကျော်တဲ့ order တွေကို ရှင်းမလဲ', days),
           field('User တစ်ယောက်စီရဲ့ နောက်ဆုံး order ဘယ်နှခုကို အမြဲချန်ထားမလဲ', last),
-          h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => { await save({ history_auto: autoSw.firstChild.checked ? '1' : '0', history_keep_days: days.value, history_keep_last: last.value }); loadInfo(); }) }, 'သိမ်းမည်'),
+          field('ရောင်းပြီး Telegram Account မှတ်တမ်း (session/2step ပါ) ဘယ်နှရက်ကျော်ရင် ဖျက်မလဲ (0 = မဖျက်)', tgDays),
+          h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => { await save({ history_auto: autoSw.firstChild.checked ? '1' : '0', history_keep_days: days.value, history_keep_last: last.value, tgacc_keep_days: tgDays.value }); loadInfo(); }) }, 'သိမ်းမည်'),
           h('div', { class: 'row' },
-            h('button', { class: 'btn grow', onclick: (e) => busy(e.target, async () => { const r = await POST('/data/cleanup', { dryRun: true }); result.textContent = `ကြိုကြည့်: Order ${fmt(r.orders)} ခု၊ ငွေဖြည့်မှတ်တမ်း ${fmt(r.deposits)}၊ help ${fmt(r.help)}၊ log ${fmt(r.logs)} ကို ရှင်းမည်ဖြစ်သည်`; }) }, '👁 ဘာတွေ ရှင်းမလဲ ကြိုကြည့်'),
-            h('button', { class: 'btn danger grow', onclick: async (e) => { if (await confirmBox('ယခု ရှင်းမည်', 'သိမ်းထားတဲ့ ဆက်တင်အတိုင်း အဟောင်းတွေကို ဖျက်မှာ သေချာပါသလား? (ပြန်မရပါ)', 'ရှင်းမည်', true)) busy(e.target, async () => { const r = await POST('/data/cleanup', { dryRun: false }); result.textContent = `ရှင်းပြီး: Order ${fmt(r.orders)} ခု၊ ငွေဖြည့်မှတ်တမ်း ${fmt(r.deposits)}၊ help ${fmt(r.help)}၊ log ${fmt(r.logs)}`; toast('ရှင်းပြီး ✅', 'ok'); loadInfo(); }); } }, '🧹 ယခုရှင်းမည်')),
+            h('button', { class: 'btn grow', onclick: (e) => busy(e.target, async () => { const r = await POST('/data/cleanup', { dryRun: true }); result.textContent = `ကြိုကြည့်: Order ${fmt(r.orders)} ခု၊ ငွေဖြည့်မှတ်တမ်း ${fmt(r.deposits)}၊ help ${fmt(r.help)}၊ log ${fmt(r.logs)}၊ TG Account ${fmt(r.tgAccounts || 0)} ကို ရှင်းမည်ဖြစ်သည်`; }) }, '👁 ဘာတွေ ရှင်းမလဲ ကြိုကြည့်'),
+            h('button', { class: 'btn danger grow', onclick: async (e) => { if (await confirmBox('ယခု ရှင်းမည်', 'သိမ်းထားတဲ့ ဆက်တင်အတိုင်း အဟောင်းတွေကို ဖျက်မှာ သေချာပါသလား? (ပြန်မရပါ)', 'ရှင်းမည်', true)) busy(e.target, async () => { const r = await POST('/data/cleanup', { dryRun: false }); result.textContent = `ရှင်းပြီး: Order ${fmt(r.orders)} ခု၊ ငွေဖြည့်မှတ်တမ်း ${fmt(r.deposits)}၊ help ${fmt(r.help)}၊ log ${fmt(r.logs)}၊ TG Account ${fmt(r.tgAccounts || 0)}`; toast('ရှင်းပြီး ✅', 'ok'); loadInfo(); }); } }, '🧹 ယခုရှင်းမည်')),
           result)));
       async function loadInfo() {
         try {
           const d = await GET('/data');
           info.replaceChildren(...[
             h('div', {}, `Orders ${fmt(d.counts.orders)} · Users ${fmt(d.counts.users)} · ငွေဖြည့် ${fmt(d.counts.deposits)} · Help ${fmt(d.counts.help)} · Log ${fmt(d.counts.logs)}`),
-            d.storage ? h('div', {}, `Database အသုံးပြုမှု: ${d.storage.storageMB} MB / ${d.storage.limitMB} MB (free plan)`) : null,
+            d.storage ? h('div', {}, `Main Database အသုံးပြုမှု: ${d.storage.storageMB} MB / ${d.storage.limitMB} MB (free plan)`) : null,
+            d.storeSeparate ? h('div', {}, d.storeUp ? `Store Database (TG Account + Log): ${d.counts.tgAccounts} Account` + (d.storeStorage ? ` · ${d.storeStorage.storageMB} MB / ${d.storeStorage.limitMB} MB` : '') : '⚠️ Store Database ချိတ်ဆက်မရပါ') : h('div', { class: 'muted' }, 'Store Database မသုံးရသေးပါ (MONGODB_URI_STORE မထည့်ရသေး - TG Account တွေ Main Database ထဲမှာ ရှိပါတယ်)'),
             h('div', {}, 'နောက်ဆုံး ရှင်းခဲ့တာ: ' + (d.lastCleanup ? dt(d.lastCleanup) : 'မရှင်းရသေးပါ'))].filter(Boolean));
         } catch (e) { info.textContent = e.message; }
       }
