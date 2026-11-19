@@ -375,6 +375,7 @@
     const kpi = (label, value, sub, cls) => h('div', { class: 'card kpi-card ' + (cls || '') }, h('div', { class: 'label' }, label), h('div', { class: 'value' }, value), h('div', { class: 'sub' }, sub || ' '));
 
     const banners = [];
+    if (d.maintenance) banners.push(h('a', { class: 'banner bad', href: '#settings' }, '🛠 Maintenance Mode ဖွင့်ထားပါသည် - User တွေ Bot ကို သုံးလို့မရပါ (Admin သာ သုံးနိုင်သည်)'));
     if (d.alerts.pendingDeposits) banners.push(h('a', { class: 'banner warn', href: '#deposits' }, `💰 စစ်ဆေးရန် ငွေဖြည့်တောင်းဆိုမှု ${d.alerts.pendingDeposits} ခု စောင့်နေပါသည်`));
     if (d.alerts.openHelp) banners.push(h('a', { class: 'banner warn', href: '#help' }, `🆘 Order အကူအညီ တောင်းဆိုမှု ${d.alerts.openHelp} ခု စောင့်နေပါသည်`));
     if (d.alerts.problemOrders) banners.push(h('a', { class: 'banner bad', href: '#orders' }, `⚠️ အာရုံစိုက်ရန် Order ${d.alerts.problemOrders} ခု (Partial / Cancel / Error)`));
@@ -1030,17 +1031,64 @@
   // ==================================================================
   async function pageSettings(view) {
     let s;
-    try { s = await GET('/settings'); } catch (e) { return fail(e); }
-    let tab = 'pricing';
+    let mt;
+    try { [s, mt] = await Promise.all([GET('/settings'), GET('/maintenance')]); } catch (e) { return fail(e); }
+    let tab = mt.on ? 'maintenance' : 'pricing';
     const body = h('div', { class: 'stack' });
     const chips = h('div', { class: 'chips', style: 'margin-bottom:12px' });
     function draw() {
-      chips.replaceChildren(...[['pricing', 'ဈေးနှုန်း'], ['payment', 'ငွေလက်ခံ'], ['features', 'Help & Data'], ['messages', 'Bot စာသားများ'], ['menu', 'Menu buttons']].map(([k, l]) => h('button', { class: 'chip' + (tab === k ? ' on' : ''), onclick: () => { tab = k; draw(); } }, l)));
+      chips.replaceChildren(...[['maintenance', mt.on ? '🛠 Maintenance 🔴' : '🛠 Maintenance'], ['pricing', 'ဈေးနှုန်း'], ['payment', 'ငွေလက်ခံ'], ['features', 'Help & Data'], ['messages', 'Bot စာသားများ'], ['menu', 'Menu buttons']].map(([k, l]) => h('button', { class: 'chip' + (tab === k ? ' on' : ''), onclick: () => { tab = k; draw(); } }, l)));
       body.replaceChildren();
-      ({ pricing: tabPricing, payment: tabPayment, features: tabFeatures, messages: tabMessages, menu: tabMenu })[tab]();
+      ({ maintenance: tabMaintenance, pricing: tabPricing, payment: tabPayment, features: tabFeatures, messages: tabMessages, menu: tabMenu })[tab]();
     }
     async function save(values) { await POST('/settings', { values }); toast('သိမ်းပြီး ✅', 'ok'); }
 
+    function tabMaintenance() {
+      const sw = h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: mt.on }), h('i'));
+      const swIn = sw.firstChild;
+      const status = h('span', { class: 'pill' });
+      const reason = h('textarea', { value: mt.reason, maxlength: 500, placeholder: 'ဥပမာ - Server ပြောင်းလဲမှုများ၊ Provider ချိတ်ဆက်မှု ပြင်ဆင်ခြင်း', style: 'min-height:84px' });
+      const dur = h('input', { type: 'number', value: mt.durationValue, min: 1, max: 9999, step: 1, inputmode: 'numeric', placeholder: 'ဥပမာ 30' });
+      const unit = h('select', { style: 'width:120px;flex:none' }, h('option', { value: 'minute' }, 'မိနစ်'), h('option', { value: 'hour' }, 'နာရီ'));
+      unit.value = mt.durationUnit;
+      const preview = h('div', { class: 'preview-box' });
+      const form = h('div', { class: 'stack' },
+        field('📝 ဘာကြောင့် Maintenance လုပ်ရတာလဲ (အကြောင်းအရင်း - user တွေ မြင်ရမည်)', reason),
+        field('⏱ ကြာနိုင်ချိန်', h('div', { class: 'row nowrap' }, h('div', { class: 'grow', style: 'min-width:0' }, dur), unit)),
+        h('div', { class: 'small muted' }, 'User တွေ မြင်ရမယ့် စာ (preview):'), preview);
+      const saveBtn = h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
+        const r = await POST('/maintenance', { on: true, reason: reason.value, durationValue: dur.value, durationUnit: unit.value });
+        mt = r; toast('Maintenance ဖွင့်ပြီး 🛠 - User တွေ Bot ကို သုံးလို့မရတော့ပါ', 'ok'); draw();
+      }) }, mt.on ? 'ပြင်ဆင်ချက် သိမ်းမည်' : '💾 သိမ်းပြီး Maintenance စမည်');
+
+      const render = () => {
+        const v = dur.value.trim();
+        const durText = v ? `${v} ${unit.value === 'hour' ? 'နာရီ' : 'မိနစ်'}` : 'ခဏအတွင်း';
+        preview.textContent = String(mt.template || '').replace(/\$\{(\w+)\}/g, (_, k) => k === 'reason' ? (reason.value.trim() || '-') : k === 'duration' ? durText : '');
+      };
+      const showState = () => {
+        const on = swIn.checked;
+        form.style.display = on ? '' : 'none';
+        saveBtn.style.display = on ? '' : 'none';
+        status.className = 'pill ' + (mt.on ? 'bad' : 'ok');
+        status.textContent = mt.on ? '🔴 ဖွင့်ထားသည် - User တွေ သုံးလို့မရ' : (on ? '🟡 အချက်အလက်ဖြည့်ပြီး သိမ်းပါ' : '🟢 ပိတ်ထားသည် - ပုံမှန်သုံးနိုင်');
+      };
+      [reason, dur].forEach(i => i.addEventListener('input', render)); unit.addEventListener('change', render);
+      swIn.addEventListener('change', async () => {
+        if (!swIn.checked && mt.on) {
+          // turning it OFF takes effect straight away - no need to press save
+          try { mt = await POST('/maintenance', { on: false }); toast('Maintenance ပိတ်ပြီး ✅ - User တွေ ပြန်သုံးနိုင်ပါပြီ', 'ok'); draw(); }
+          catch (e) { swIn.checked = true; fail(e); }
+          return;
+        }
+        showState();
+      });
+      render(); showState();
+      body.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'row nowrap' }, h('div', { class: 'grow' }, h('h2', { style: 'margin:0' }, '🛠 Maintenance Mode'),
+          h('div', { class: 'muted small' }, 'ဖွင့်ထားရင် User တွေ ဘာ button နှိပ်နှိပ်၊ AI ကို ဘာမေးမေး အောက်က Maintenance စာကိုပဲ ပြန်ရပါမယ်။ Admin တွေကတော့ ပုံမှန်အတိုင်း သုံးနိုင်ပါတယ်။')), sw),
+        h('div', { style: 'height:8px' }), status, h('div', { style: 'height:10px' }), form, h('div', { style: 'height:10px' }), saveBtn));
+    }
     function tabPricing() {
       body.appendChild(h('div', { class: 'muted small' }, 'ရောင်းဈေး = Provider ရဲ့ USD ဈေး × USD→MMK rate × Markup (နောက်ထပ် Order တွေကစပြီး ချက်ချင်း သက်ရောက်ပါမယ်)'));
       for (const [p, v] of Object.entries(s.pricing)) {
