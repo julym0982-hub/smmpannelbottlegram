@@ -199,12 +199,13 @@
   const MORE = [
     { id: 'ai', label: 'AI Bot', icon: 'bot' },
     { id: 'help', label: 'Help Orders', icon: 'help' },
+    { id: 'accounts', label: 'TG Accounts', icon: 'users' },
     { id: 'coupons', label: 'Coupon', icon: 'gift' },
     { id: 'broadcast', label: 'စာပို့ရန်', icon: 'mega' },
     { id: 'settings', label: 'Settings', icon: 'gear' },
     { id: 'logs', label: 'Activity Log', icon: 'log' }
   ];
-  const PAGES = { dashboard: pageDashboard, deposits: pageDeposits, orders: pageOrders, users: pageUsers, services: pageServices, help: pageHelp, ai: pageAI, coupons: pageCoupons, broadcast: pageBroadcast, settings: pageSettings, logs: pageLogs };
+  const PAGES = { dashboard: pageDashboard, deposits: pageDeposits, orders: pageOrders, users: pageUsers, services: pageServices, help: pageHelp, ai: pageAI, accounts: pageAccounts, coupons: pageCoupons, broadcast: pageBroadcast, settings: pageSettings, logs: pageLogs };
 
   function routeId() { const r = (location.hash || '#dashboard').slice(1).split('?')[0]; return PAGES[r] ? r : 'dashboard'; }
   function clearTimers() { state.timers.forEach(clearInterval); state.timers = []; }
@@ -974,6 +975,106 @@
   }
 
   // ==================================================================
+  // PAGE: TG Accounts (phone + session for the bot's "Telegram Account" shop)
+  // ==================================================================
+  // code the account received (newest 5 min / newest ever)
+  function openAccCode(a) {
+    const out = h('div', { class: 'muted' }, 'ခလုတ်တစ်ခု နှိပ်ပါ');
+    const run = (mode) => (e) => busy(e.target, async () => {
+      out.textContent = '⏳ စစ်နေပါတယ် (1-20s)…';
+      try {
+        const r = await POST('/tgaccounts/' + a.id + '/code', { mode });
+        out.replaceChildren(r.found ? h('div', {}, h('div', { class: 'mono', style: 'font-size:1.6em' }, r.code), h('div', { class: 'small muted' }, dt(r.date) + ' (' + ago(r.date) + ')'), copyBtn(r.code, 'Copy Code'))
+          : h('div', {}, mode === '5min' ? '5 မိနစ်အတွင်း code မရှိပါ' : 'Code တစ်ခုမှ မတွေ့ပါ'));
+      } catch (err) { out.textContent = ''; fail(err); }
+    });
+    modal('Code စစ်ရန် · +' + a.phone, h('div', { class: 'stack' },
+      h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: run('5min') }, '5min code'), h('button', { class: 'btn', onclick: run('last') }, 'နောက်ဆုံး code (အရင်ဆုံးပို့ထားတာ)')), out));
+  }
+  function openAccProfile(a, p) {
+    modal('Profile · +' + a.phone, h('div', { class: 'stack' },
+      kv([['နာမည်', p.name || '-'], ['Username', p.username ? '@' + p.username : '-'], ['ID', h('span', { class: 'mono' }, p.id)], ['ဖုန်း', h('span', { class: 'mono' }, '+' + p.phone)], ['2step psw', p.twoStep || 'မရှိ'], ['ဈေး', mmk(p.price)]]),
+      h('a', { class: 'btn primary', href: p.link, target: '_blank', rel: 'noopener' }, '👤 Profile Page ဖွင့်မည်'), copyBtn(p.link, 'Link Copy')));
+  }
+
+  async function pageAccounts(view) {
+    const phone = h('input', { type: 'text', placeholder: 'ဖုန်းနံပါတ် (959123456789)', inputmode: 'numeric', maxlength: 20 });
+    const session = h('textarea', { placeholder: 'Session string (tools/make-session.js နဲ့ ထုတ်ထားတာ)', rows: 3, autocomplete: 'off', spellcheck: 'false' });
+    const note = h('input', { type: 'text', placeholder: 'Note (မထည့်လည်းရ)', maxlength: 100 });
+    const price = h('input', { type: 'number', inputmode: 'numeric', placeholder: 'ဒီ Account ရဲ့ ဈေး (ကျပ်) - ဥပမာ 1300' });
+    const twoStep = h('input', { type: 'text', placeholder: '2step password (မရှိရင် ထားခဲ့)', maxlength: 100, autocomplete: 'off' });
+    const head = h('div', { class: 'card' });
+    const list = h('div', {});
+    const STATUS = { available: '🟢 ရောင်းရန်ရှိ', sold: '🔴 ရောင်းပြီး', disabled: '⚪ ပိတ်ထား' };
+    // ---- New session: phone -> code -> (2FA password) -> price -> saved as account
+    const ns = h('div', { class: 'card' });
+    function newSessionCard() {
+      let loginId = '';
+      const draw = (...kids) => ns.replaceChildren(h('h2', {}, 'Session အသစ်ထုတ်ပြီး Account ထည့်ရန်'), h('div', { class: 'stack' }, ...kids));
+      const reset = () => { if (loginId) POST('/tglogin/cancel', { loginId }).catch(() => {}); loginId = ''; stepPhone(); };
+      const cancelBtn = h('button', { class: 'btn', onclick: reset }, 'မလုပ်တော့ပါ');
+      function stepPhone() {
+        const ph = h('input', { type: 'text', placeholder: 'ဖုန်းနံပါတ် (country code နဲ့ - 959123456789)', inputmode: 'numeric', maxlength: 20 });
+        draw(h('div', { class: 'muted small' }, 'Telegram က ဒီနံပါတ်ဆီ Login code ပို့ပါမယ်။ ကိုယ်ပိုင် Account အတွက်သာ သုံးပါ။'), ph,
+          h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => { const r = await POST('/tglogin/start', { phone: ph.value }); loginId = r.loginId; toast(r.viaApp ? 'Code ကို Telegram app ထဲ ပို့ပြီး' : 'Code ပို့ပြီး (SMS)', 'ok'); stepCode(r.viaApp); }) }, 'Code ပို့မည်'));
+      }
+      function stepCode(viaApp) {
+        const code = h('input', { type: 'text', placeholder: 'Login code', inputmode: 'numeric', maxlength: 8, autocomplete: 'off' });
+        draw(h('div', { class: 'muted small' }, viaApp ? 'Code ကို အဲဒီ Account ရှိတဲ့ Telegram app ထဲ (Telegram chat) မှာ ကြည့်ပါ' : 'Code ကို SMS နဲ့ ပို့ထားပါတယ်'), code,
+          h('div', { class: 'row' }, cancelBtn, h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
+            const r = await POST('/tglogin/code', { loginId, code: code.value });
+            if (r.status === 'password') { toast('2step password လိုပါတယ်', 'ok'); stepPassword(); } else stepSave(r);
+          }) }, 'အတည်ပြုမည်')));
+      }
+      function stepPassword() {
+        const pw = h('input', { type: 'password', placeholder: '2step password', autocomplete: 'off' });
+        draw(h('div', { class: 'muted small' }, 'ဒီ Account မှာ 2step password ရှိပါတယ်'), pw,
+          h('div', { class: 'row' }, cancelBtn, h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => { stepSave(await POST('/tglogin/password', { loginId, password: pw.value })); }) }, 'ဝင်မည်')));
+      }
+      function stepSave(r) {
+        const price = h('input', { type: 'number', inputmode: 'numeric', placeholder: 'ဒီ Account ရဲ့ ဈေး (ကျပ်) - ဥပမာ 1300' });
+        const two = h('input', { type: 'text', placeholder: r.hasPassword ? '2step password (ဝင်ခဲ့တဲ့ password ကို သုံးမယ် - ပြောင်းချင်မှ ရေး)' : '2step password (မရှိရင် ထားခဲ့)', autocomplete: 'off' });
+        const note = h('input', { type: 'text', placeholder: 'Note (မထည့်လည်းရ)', maxlength: 100 });
+        draw(h('div', {}, '✅ Login ဝင်ပြီး: ', h('strong', {}, (r.name || '') + ' '), h('span', { class: 'mono' }, '+' + r.phone), r.username ? ' @' + r.username : ''), price, two, note,
+          h('div', { class: 'row' }, cancelBtn, h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
+            await POST('/tglogin/save', { loginId, price: price.value, twoStep: two.value, note: note.value });
+            loginId = ''; toast('Account ထည့်ပြီး ✅', 'ok'); stepPhone(); load();
+          }) }, 'ရောင်းရန်စာရင်းထဲ ထည့်မည်')));
+      }
+      stepPhone();
+    }
+    newSessionCard();
+    view.append(ns, h('div', { style: 'height:12px' }));
+    view.append(
+      h('div', { class: 'card' }, h('h2', {}, 'Session ရှိပြီးသား Account ထည့်ရန်'), h('div', { class: 'stack' }, phone, price, twoStep, session, note,
+        h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
+          await POST('/tgaccounts', { phone: phone.value, session: session.value, note: note.value, price: price.value, twoStep: twoStep.value });
+          toast('ထည့်ပြီး ✅', 'ok'); phone.value = session.value = note.value = twoStep.value = ''; load();
+        }) }, 'ထည့်မည်'))),
+      h('div', { style: 'height:12px' }), head, h('div', { style: 'height:12px' }), list);
+    async function load() {
+      let r; try { r = await GET('/tgaccounts'); } catch (e) { return fail(e); }
+      head.replaceChildren(h('h2', {}, 'လက်ကျန်'), h('div', { class: 'stack' },
+        h('div', { class: 'muted small' }, `🟢 ${r.stats.available} · 🔴 ${r.stats.sold} · ⚪ ${r.stats.disabled}`),
+        r.apiConfigured ? null : h('div', { class: 'muted small' }, '⚠️ TG_API_ID / TG_API_HASH environment မသတ်မှတ်ရသေးလို့ Get Code အလုပ်မလုပ်သေးပါ'),
+        h('label', { class: 'row' }, h('input', { type: 'checkbox', checked: r.enabled, onchange: (e) => busy(null, async () => { await POST('/tgaccounts/settings', { enabled: e.target.checked }); toast(e.target.checked ? 'ဖွင့်ပြီး' : 'ပိတ်ပြီး', 'ok'); }) }), ' Bot မှာ Telegram Account ရောင်းမည်')));
+      list.replaceChildren(r.items.length ? h('div', { class: 'card' }, h('div', { class: 'list' }, r.items.map(a =>
+        h('div', { class: 'item row nowrap' },
+          h('div', { class: 'grow' },
+            h('strong', { class: 'mono' }, '+' + a.phone), h('div', { class: 'muted small' }, STATUS[a.status] + ' · ' + mmk(a.price) + (a.hasTwoStep ? ' · 2step ✓' : '') + (a.note ? ' · ' + a.note : '')),
+            a.status === 'sold' ? h('div', { class: 'muted small' }, `User ${a.soldTo} · ${dt(a.soldAt)} · Code ${a.codeRequests} ကြိမ်`) : null),
+          h('button', { class: 'btn sm', onclick: () => openAccCode(a) }, 'Code'),
+          h('button', { class: 'btn sm', onclick: (e) => busy(e.target, async () => { const p = await POST('/tgaccounts/' + a.id + '/profile'); if (!p.ok) return toast('Session သက်တမ်းကုန်/မမှန်ပါ ❌', 'err'); openAccProfile(a, p); }) }, 'Profile'),
+          h('button', { class: 'btn sm', onclick: (e) => busy(e.target, async () => { const c = await POST('/tgaccounts/' + a.id + '/check'); toast(c.ok ? 'Session အလုပ်လုပ်ပါတယ် ✅ ' + (c.name || '') : 'Session သက်တမ်းကုန်/မမှန်ပါ ❌', c.ok ? 'ok' : 'err'); }) }, 'စစ်'),
+          a.status !== 'sold' ? h('button', { class: 'btn sm', onclick: async () => { const v = await promptBox('ဈေးပြင်မည်: +' + a.phone, 'ဈေး (ကျပ်)', { value: String(a.price || ''), type: 'number', okLabel: 'သိမ်းမည်' }); if (!v) return; try { await PATCH('/tgaccounts/' + a.id, { price: v }); load(); } catch (e) { fail(e); } } }, 'ဈေး') : null,
+          a.status === 'available' ? h('button', { class: 'btn sm', onclick: (e) => busy(e.target, async () => { await PATCH('/tgaccounts/' + a.id, { status: 'disabled' }); load(); }) }, 'ပိတ်') : null,
+          a.status !== 'available' ? h('button', { class: 'btn sm', onclick: async (e) => { if (a.status === 'sold' && !(await confirmBox('ပြန်ရောင်းမည်', '+' + a.phone + ' ကို ရောင်းရန်စာရင်းပြန်ထည့်မှာ သေချာပါသလား? (ဝယ်သူ record ပျက်သွားမယ်)', 'ပြန်ထည့်မည်'))) return; busy(e.target, async () => { await PATCH('/tgaccounts/' + a.id, { status: 'available' }); load(); }); } }, 'ပြန်ရောင်း') : null,
+          h('button', { class: 'btn sm danger', onclick: async () => { if (await confirmBox('Account ဖျက်မည်', '+' + a.phone, 'ဖျက်မည်', true)) { try { await DEL('/tgaccounts/' + a.id); load(); } catch (e) { fail(e); } } } }, '🗑'))))) : empty('Account မရှိသေးပါ'));
+    }
+    load();
+  }
+
+  // ==================================================================
   // PAGE: Coupons
   // ==================================================================
   async function pageCoupons(view) {
@@ -1125,7 +1226,7 @@
       const f = s.features;
       const sw = (checked, onchange) => h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked, onchange }), h('i'));
       const helpSw = sw(f.help_enabled !== '0', async () => { try { await save({ help_enabled: helpSw.firstChild.checked ? '1' : '0' }); toast(helpSw.firstChild.checked ? 'Help Order ဖွင့်ပြီး (user တွေ မြင်ရမည်)' : 'Help Order ပိတ်ပြီး (user တွေ မမြင်ရတော့)', 'ok'); } catch (e) { helpSw.firstChild.checked = !helpSw.firstChild.checked; fail(e); } });
-      body.appendChild(h('div', { class: 'card' }, h('div', { class: 'row nowrap' }, h('div', { class: 'grow' }, h('h2', { style: 'margin:0' }, '🆘 Order အကူအညီ (Help Order)'), h('div', { class: 'muted small' }, 'ပိတ်ထားရင် user တွေရဲ့ main menu ထဲမှာ ခလုတ် မပေါ်ပါ၊ ဖွင့်ရင် ပေါ်ပါမယ်')), helpSw)));
+      body.appendChild(h('div', { class: 'card' }, h('div', { class: 'row nowrap' }, h('div', { class: 'grow' }, h('h2', { style: 'margin:0' }, '🆘 Order အကူအညီ (Help Order)'), h('div', { class: 'muted small' }, 'ပိတ်ထားရင် user တွေရဲ့ 🛟 Support ထဲမှာ ခလုတ် မပေါ်ပါ၊ ဖွင့်ရင် ပေါ်ပါမယ်')), helpSw)));
 
       const autoSw = sw(f.history_auto !== '0', () => {});
       const days = h('input', { type: 'number', value: f.history_keep_days, min: 1, max: 365, inputmode: 'numeric' });
@@ -1170,7 +1271,7 @@
     function tabMenu() {
       const label = h('input', { type: 'text', placeholder: '☎️ Contact Admin', maxlength: 40 });
       const url = h('input', { type: 'url', placeholder: 'https://t.me/YourUsername' });
-      body.appendChild(h('div', { class: 'card' }, h('h2', {}, 'Main menu button အသစ်'), h('div', { class: 'stack' }, field('Button စာသား', label), field('Link (user နှိပ်ရင် ဖွင့်မည့် link)', url),
+      body.appendChild(h('div', { class: 'card' }, h('h2', {}, 'Support ထဲက Admin button အသစ်'), h('div', { class: 'stack' }, field('Button စာသား', label), field('Link (user နှိပ်ရင် ဖွင့်မည့် link)', url),
         h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => { await POST('/menu-buttons', { label: label.value, url: url.value }); toast('ထည့်ပြီး', 'ok'); s = await GET('/settings'); draw(); }) }, 'ထည့်မည်'))));
       body.appendChild(h('div', { class: 'card' }, h('h2', {}, 'ရှိပြီးသား'), s.menuButtons.length ? h('div', { class: 'list' }, s.menuButtons.map(b =>
         h('div', { class: 'item row nowrap' }, h('div', { class: 'grow' }, h('strong', {}, b.label), h('div', { class: 'muted small trunc' }, b.url)),
