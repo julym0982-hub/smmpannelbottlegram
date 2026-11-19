@@ -11,6 +11,7 @@ const path = require('path');
 const axios = require('axios');
 const { Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, MenuButton, HelpRequest, Stat, ApiKey, AiUsage, TgAccount } = require('./models');
 const tgSession = require('./tg-session');
+const store = require('./store');
 const mongoose = require('mongoose');
 const retention = require('./retention');
 const ai = require('./ai');
@@ -177,7 +178,7 @@ const SETTABLE_STATUS = { pending: 'pending', processing: 'Processing', 'in prog
 // feature switches + retention knobs (shown on the Settings > Data tab, not as bot messages)
 // maintenance mode has its own endpoint (GET/POST /maintenance) - these keys stay out of the generic settings forms
 const MAINT_KEYS = ['maintenance_on', 'maintenance_reason', 'maintenance_duration_value', 'maintenance_duration_unit'];
-const FEATURE_KEYS = ['help_enabled', 'history_auto', 'history_keep_days', 'history_keep_last', 'history_last_cleanup', ...MAINT_KEYS];
+const FEATURE_KEYS = ['help_enabled', 'history_auto', 'history_keep_days', 'history_keep_last', 'history_last_cleanup', 'tgacc_keep_days', ...MAINT_KEYS];
 const PAYMENT_KEYS = ['kpay_number', 'kpay_name', 'wave_number', 'wave_name', 'topup_min_amount', 'low_balance_threshold'];
 const NUMERIC_KEYS = () => [
   'topup_min_amount', 'low_balance_threshold',
@@ -200,7 +201,8 @@ module.exports = function mountAdminPanel(app, deps) {
     return `${base}${BASE}/login?token=${token}`;
   }
 
-  const log = (req, action, detail) => AdminLog.create({ admin: req.adminId, action, detail: String(detail || '').slice(0, 500) }).catch(() => {});
+  const logWrite = (doc) => store.isUp() ? AdminLog.create(doc).catch(() => {}) : Promise.resolve();
+  const log = (req, action, detail) => logWrite({ admin: req.adminId, action, detail: String(detail || '').slice(0, 500) });
   const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch(err => {
     const status = err.status || 500;
     if (status >= 500) console.error('admin api error:', err && err.stack || err);
@@ -260,7 +262,7 @@ module.exports = function mountAdminPanel(app, deps) {
     if (secure) res.set('Strict-Transport-Security', 'max-age=31536000');
     const giveSession = async (adminId, how) => {
       res.cookie(COOKIE, makeSession(adminId, how === 'password' ? 'password' : 'link'), { httpOnly: true, sameSite: 'strict', secure, path: BASE, maxAge: SESSION_TTL });
-      await AdminLog.create({ admin: adminId, action: 'login', detail: `${how} ip ${ip}` }).catch(() => {});
+      await logWrite({ admin: adminId, action: 'login', detail: `${how} ip ${ip}` });
       res.json({ ok: true });
     };
 
@@ -279,7 +281,7 @@ module.exports = function mountAdminPanel(app, deps) {
         failedLogins.set(ip, f);
         await new Promise(r => setTimeout(r, 800)); // slow guessing down
         console.error(`panel login failed (ip ${ip}): ${why}`);
-        await AdminLog.create({ admin: 'unknown', action: 'login_failed', detail: `ip ${ip}` }).catch(() => {});
+        await logWrite({ admin: 'unknown', action: 'login_failed', detail: `ip ${ip}` });
         if (f.until > Date.now()) for (const id of (deps.adminIds || [])) safeSend(id, `⚠️ Admin Panel login မှားနေပါတယ် (ip ${ip}) - ၁၅ မိနစ် ပိတ်လိုက်ပါပြီ။ မိမိမဟုတ်ရင် PANEL_PASSWORD ပြောင်းပါ။`);
         throw fail(401, message);
       };
@@ -502,6 +504,27 @@ module.exports = function mountAdminPanel(app, deps) {
     if (r.error === 'bad_amount') throw fail(400, 'ပမာဏ မမှန်ပါ');
     throw fail(404, 'တောင်းဆိုမှု မတွေ့ပါ');
   };
+  // delete closed top-up records (frees database space; user balances are NOT touched).
+  // Pending requests can never be deleted here - approve or reject them first.
+  api.delete('/deposits/:id', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const d = await Deposit.findOneAndDelete({ _id: req.params.id, status: { $ne: 'pending' } });
+    if (!d) throw fail(404, 'မတွေ့ပါ (သို့) စောင့်ဆိုင်းဆဲ ဖြစ်နေပါသည်');
+    log(req, 'deposit_delete', `${d.userId} ${d.amount} ${d.status}`);
+    res.json({ ok: true });
+  }));
+  // body: { status: 'approved'|'rejected'|'all', olderThanDays: 0..3650, dryRun }
+  api.post('/deposits/cleanup', wrap(async (req, res) => {
+    const st = String(req.body.status || 'all');
+    if (!['approved', 'rejected', 'all'].includes(st)) throw fail(400, 'status မမှန်ပါ');
+    const days = num(req.body.olderThanDays, 'ရက်အရေအတွက်', { min: 0, max: 3650, int: true });
+    const q = { status: st === 'all' ? { $in: ['approved', 'rejected'] } : st };
+    if (days > 0) q.createdAt = { $lt: new Date(Date.now() - days * 86400000) };
+    if (req.body.dryRun !== false) return res.json({ ok: true, dryRun: true, count: await Deposit.countDocuments(q) });
+    const r = await Deposit.deleteMany(q);
+    log(req, 'deposit_cleanup', `${st} older than ${days}d -> ${r.deletedCount}`);
+    res.json({ ok: true, dryRun: false, count: r.deletedCount });
+  }));
   api.post('/deposits/:id/approve', wrap(async (req, res) => {
     if (!isOid(req.params.id)) throw fail(404, 'not found');
     const amount = req.body.amount === undefined || req.body.amount === null || req.body.amount === ''
@@ -1013,6 +1036,11 @@ module.exports = function mountAdminPanel(app, deps) {
       items: rows.map(tgItem)
     });
   }));
+  // all Telegram-account routes need the store database (the main one unless MONGODB_URI_STORE is set)
+  const needStore = (req, res, next) => store.isUp() ? next() : res.status(503).json({ error: 'store_down', message: 'Store database (MONGODB_URI_STORE) ချိတ်ဆက်မရသေးပါ' });
+  api.use('/tgaccounts', needStore);
+  api.use('/tglogin', needStore);
+
   // --- create a new session right here: phone -> code -> (2FA password) -> save as account
   const tgErr = (e) => {
     const m = String((e && (e.errorMessage || e.message)) || e);
@@ -1068,7 +1096,7 @@ module.exports = function mountAdminPanel(app, deps) {
     catch (e) { throw fail(502, 'စစ်မရပါ: ' + String(e.message).slice(0, 150)); }
     if (!r.ok) return res.json({ ok: false });
     await TgAccount.updateOne({ _id: a._id }, { $set: { tgUserId: r.id, tgUsername: r.username } });
-    const link = r.username ? `https://t.me/${r.username}` : `tg://user?id=${r.id}`;
+    const link = r.username ? `https://t.me/${r.username}?profile` : `tg://user?id=${r.id}`; // ?profile opens the profile page instead of a chat
     let pw = ''; try { pw = a.twoStepEnc ? ai.decrypt(a.twoStepEnc) : ''; } catch (_) {}
     res.json({ ok: true, id: r.id, username: r.username, phone: r.phone, name: r.name, link, twoStep: pw, price: a.price || 0 });
   }));
@@ -1164,6 +1192,9 @@ module.exports = function mountAdminPanel(app, deps) {
       const sv = String(v).trim();
       if (k === 'help_enabled' || k === 'history_auto') {
         if (!['0', '1'].includes(sv)) throw fail(400, `${k} သည် 0 သို့မဟုတ် 1 ဖြစ်ရမည်`);
+      } else if (k === 'tgacc_keep_days') {
+        const n = Number(sv);
+        if (!Number.isInteger(n) || n < 0 || n > 365) throw fail(400, 'tgacc_keep_days သည် 0 ကနေ 365 ကြား ဖြစ်ရမည်');
       } else if (k === 'history_keep_days' || k === 'history_keep_last') {
         const n = Number(sv);
         if (!Number.isInteger(n) || n < (k === 'history_keep_days' ? 1 : 0) || n > 365) throw fail(400, `${k} မမှန်ပါ`);
@@ -1250,21 +1281,26 @@ module.exports = function mountAdminPanel(app, deps) {
   // Data & storage: collection sizes + history cleanup (preview / run now)
   // ======================================================================
   api.get('/data', wrap(async (req, res) => {
-    const [orders, users, deposits, help, logs, stats] = await Promise.all([
-      Order.countDocuments(), User.countDocuments(), Deposit.countDocuments(), HelpRequest.countDocuments(), AdminLog.countDocuments(), Stat.countDocuments()
+    const up = store.isUp();
+    const [orders, users, deposits, help, stats, logs, tgAccounts] = await Promise.all([
+      Order.countDocuments(), User.countDocuments(), Deposit.countDocuments(), HelpRequest.countDocuments(), Stat.countDocuments(),
+      up ? AdminLog.countDocuments() : 0, up ? TgAccount.countDocuments() : 0
     ]);
-    let storage = null;
-    try {
-      const st = await mongoose.connection.db.stats();
-      storage = { dataMB: +(st.dataSize / 1048576).toFixed(1), storageMB: +((st.storageSize || st.dataSize) / 1048576).toFixed(1), limitMB: 512 };
-    } catch (_) { /* not available on every deployment */ }
+    const dbStats = async (conn) => {
+      try {
+        const st = await conn.db.stats();
+        return { dataMB: +(st.dataSize / 1048576).toFixed(1), storageMB: +((st.storageSize || st.dataSize) / 1048576).toFixed(1), limitMB: 512 };
+      } catch (_) { return null; /* not available on every deployment */ }
+    };
+    const storage = await dbStats(mongoose.connection);
+    const storeStorage = store.separate && up ? await dbStats(store.db) : null;
     const last = texts.t('history_last_cleanup');
-    res.json({ counts: { orders, users, deposits, help, logs, stats }, storage, lastCleanup: last || null, ...retention.settings() });
+    res.json({ counts: { orders, users, deposits, help, logs, stats, tgAccounts }, storage, storeStorage, storeSeparate: store.separate, storeUp: up, lastCleanup: last || null, ...retention.settings(), tgKeepDays: texts.t('tgacc_keep_days') });
   }));
   api.post('/data/cleanup', wrap(async (req, res) => {
     const dryRun = req.body.dryRun !== false;
     const r = await retention.runCleanup({ dryRun });
-    if (!dryRun) log(req, 'history_cleanup', `orders ${r.orders}, deposits ${r.deposits}, help ${r.help}, logs ${r.logs}`);
+    if (!dryRun) log(req, 'history_cleanup', `orders ${r.orders}, deposits ${r.deposits}, help ${r.help}, logs ${r.logs}, tg accounts ${r.tgAccounts}`);
     res.json({ ok: true, dryRun, ...r });
   }));
 
@@ -1398,7 +1434,7 @@ module.exports = function mountAdminPanel(app, deps) {
   }));
 
   api.get('/logs', wrap(async (req, res) => {
-    const rows = await AdminLog.find({}).sort({ createdAt: -1 }).limit(100).lean();
+    const rows = store.isUp() ? await AdminLog.find({}).sort({ createdAt: -1 }).limit(100).lean() : [];
     res.json({ items: rows.map(l => ({ admin: l.admin, action: l.action, detail: l.detail, createdAt: l.createdAt })) });
   }));
 

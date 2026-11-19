@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const { Telegraf, Markup } = require('telegraf');
 const { MenuButton, Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, HelpRequest, Counter, TgAccount } = require('./models');
 const tgSession = require('./tg-session');
+const store = require('./store');
 const providers = require('./providers');
 const texts = require('./texts');
 const mountAdminPanel = require('./admin');
@@ -610,9 +611,7 @@ async function showShopHome(ctx) {
     `🔖 Username : ${esc(uname)}\n` +
     `💰 Balance : <b>${nf(u && u.balance)}</b> ကျပ်\n\n` +
     `👇 ဝယ်ယူလိုသည့် ဝန်ဆောင်မှု ရွေးပါရှင့်`;
-  // price on the button = price of the NEXT account that would be sold (oldest in stock)
-  const nextAcc = await TgAccount.findOne({ status: 'available' }).sort({ createdAt: 1 }).select('price').lean();
-  const tgLabel = nextAcc && nextAcc.price && texts.getRaw('tgacc_enabled') !== '0' ? `Telegram Account———${nextAcc.price}KS` : 'Telegram Account';
+  const tgLabel = await tgShopLabel();
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback(tgLabel, 'tg_account')],
     [Markup.button.callback('🚀 Boost Service', 'boost')]
@@ -622,6 +621,29 @@ async function showShopHome(ctx) {
 bot.action('shop_home', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); st(ctx.from.id).level = 'root'; await showShopHome(ctx); });
 
 // ---- Telegram Account shop -------------------------------------------------
+// shop-menu button text: price of the NEXT account that would be sold (oldest in stock).
+// Cached for 10 s so opening the Shop does not hit the database every time.
+let tgLabelCache = { at: 0, text: 'Telegram Account' };
+async function tgShopLabel() {
+  if (Date.now() - tgLabelCache.at < 10000) return tgLabelCache.text;
+  let text = 'Telegram Account';
+  if (store.isUp() && texts.getRaw('tgacc_enabled') !== '0') {
+    try {
+      const next = await TgAccount.findOne({ status: 'available' }).sort({ createdAt: 1 }).select('price').lean();
+      if (next && next.price) text = `Telegram Account———${next.price}KS`;
+    } catch (err) { console.error('tg shop label:', err && err.message || err); }
+  }
+  tgLabelCache = { at: Date.now(), text };
+  return text;
+}
+// if the store database is unreachable, answer politely instead of hanging
+bot.use(async (ctx, next) => {
+  const d = ctx.callbackQuery && ctx.callbackQuery.data;
+  if (d && /^(tg_account$|tgacc_|tgh_)/.test(d) && !store.isUp()) {
+    return ctx.answerCbQuery('ခဏနေမှ ပြန်စမ်းပါရှင့် (Server ချိတ်ဆက်မှု ခေတ္တ မရပါ)', { show_alert: true }).catch(() => {});
+  }
+  return next();
+});
 // Shop: [Buy Account] -> name/balance/price + [ဝယ်မည်] -> phone + 2step psw + [Get Otp]
 // History > Account ဝယ်ယူမှုမှတ်တမ်း -> number -> [Profile] [Code ယူရန်] [Remove From History]
 // Phone / session / 2step / price are added per account in Admin Panel > TG Accounts.
@@ -681,6 +703,7 @@ bot.action(new RegExp(`^tgacc_go_${OID}$`), async (ctx) => {
       return ctx.reply(texts.t('insufficient_balance', { name: displayName(ctx.from) }),
         Markup.inlineKeyboard([[Markup.button.callback('💰ငွေဖြည့်ရန်💰', 'go_topup')]]));
     }
+    tgLabelCache.at = 0; // next account (maybe a different price) shows on the Shop button straight away
     await showInline(ctx, tgBoughtText(acc), Markup.inlineKeyboard([[Markup.button.callback('Get Otp', `tgacc_otp_${acc._id}`)], [Markup.button.callback('◀️ Back', 'shop_home')]]));
     const left = await TgAccount.countDocuments({ status: 'available' });
     for (const id of ADMIN_IDS) await safeSend(id, `📱 Telegram Account ရောင်းရပါပြီ\n+${acc.phone} → ${displayName(ctx.from)} (${uid})\n💰 ${nf(price)} ကျပ် · လက်ကျန် ${left} Acc`).catch(() => {});
@@ -806,7 +829,7 @@ async function tgProfileLink(acc) {
       if (r.ok) { acc.tgUserId = r.id; acc.tgUsername = r.username; await TgAccount.updateOne({ _id: acc._id }, { $set: { tgUserId: r.id, tgUsername: r.username } }); }
     } catch (err) { console.error('profile lookup failed:', err && err.message || err); }
   }
-  if (acc.tgUsername) return `https://t.me/${acc.tgUsername}`;
+  if (acc.tgUsername) return `https://t.me/${acc.tgUsername}?profile`; // ?profile = profile page, not a chat
   if (acc.tgUserId) return `tg://user?id=${acc.tgUserId}`;
   return `https://t.me/+${acc.phone}`; // fallback: opens by phone number
 }
@@ -2367,6 +2390,7 @@ mongoose.connect(MONGODB_URI).then(async () => {
   console.log('MongoDB connected');
   await texts.preload();
   require('./chatlog').init(); // separate MongoDB for AI chat history (optional)
+  store.init(); // optional 3rd MongoDB (MONGODB_URI_STORE) for Telegram accounts + activity log
   migrateOrderNos().catch(err => console.error('order number migration failed:', err.message));
   retention.autoCleanup();
   setInterval(() => { retention.autoCleanup(); }, 6 * 3600 * 1000);

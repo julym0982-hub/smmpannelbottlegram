@@ -7,7 +7,8 @@
 //    daily Stat collection, so the dashboard totals stay correct
 //  - old closed deposits, help requests and admin logs (>30 days) go too
 // =======================================================================
-const { Order, Deposit, HelpRequest, AdminLog, Stat, AiUsage } = require('./models');
+const { Order, Deposit, HelpRequest, AdminLog, Stat, AiUsage, TgAccount } = require('./models');
+const store = require('./store');
 const texts = require('./texts');
 
 const MMT_OFFSET = 6.5 * 3600 * 1000;
@@ -62,17 +63,32 @@ async function cleanOrders({ dryRun = false } = {}) {
   return { orders: deleted, keepDays, keepLast };
 }
 
+// sold Telegram accounts: after `tgacc_keep_days` the whole record (session, 2step, buyer) is deleted.
+// Buyers only see their History for 10 days anyway. 0 = keep forever. Unsold stock is never touched.
+function tgKeepDays() {
+  const n = Math.floor(Number(texts.t('tgacc_keep_days')));
+  return Number.isFinite(n) && n >= 0 ? n : 30;
+}
+async function cleanTgAccounts({ dryRun = false } = {}) {
+  const days = tgKeepDays();
+  if (!days || !store.isUp()) return 0;
+  const q = { status: 'sold', soldAt: { $lt: new Date(Date.now() - Math.max(days, 11) * DAY) } }; // never earlier than the 10-day history window
+  return dryRun ? TgAccount.countDocuments(q) : (await TgAccount.deleteMany(q)).deletedCount;
+}
+
 async function runCleanup({ dryRun = false } = {}) {
   const res = await cleanOrders({ dryRun });
   const cutoff30 = new Date(Date.now() - 30 * DAY);
   if (dryRun) {
     res.deposits = await Deposit.countDocuments({ status: { $ne: 'pending' }, createdAt: { $lt: cutoff30 } });
     res.help = await HelpRequest.countDocuments({ status: 'done', createdAt: { $lt: cutoff30 } });
-    res.logs = await AdminLog.countDocuments({ createdAt: { $lt: cutoff30 } });
+    res.logs = store.isUp() ? await AdminLog.countDocuments({ createdAt: { $lt: cutoff30 } }) : 0;
+    res.tgAccounts = await cleanTgAccounts({ dryRun: true });
   } else {
     res.deposits = (await Deposit.deleteMany({ status: { $ne: 'pending' }, createdAt: { $lt: cutoff30 } })).deletedCount;
     res.help = (await HelpRequest.deleteMany({ status: 'done', createdAt: { $lt: cutoff30 } })).deletedCount;
-    res.logs = (await AdminLog.deleteMany({ createdAt: { $lt: cutoff30 } })).deletedCount;
+    res.logs = store.isUp() ? (await AdminLog.deleteMany({ createdAt: { $lt: cutoff30 } })).deletedCount : 0;
+    res.tgAccounts = await cleanTgAccounts();
     await AiUsage.deleteMany({ createdAt: { $lt: new Date(Date.now() - 3 * DAY) } }); // daily question counters are only needed for today
     await texts.setText('history_last_cleanup', new Date().toISOString());
   }
@@ -86,7 +102,7 @@ async function autoCleanup() {
   if (Date.now() - last < 20 * 3600 * 1000) return;
   try {
     const r = await runCleanup();
-    console.log(`History cleanup: orders ${r.orders}, deposits ${r.deposits}, help ${r.help}, logs ${r.logs}`);
+    console.log(`History cleanup: orders ${r.orders}, deposits ${r.deposits}, help ${r.help}, logs ${r.logs}, tg accounts ${r.tgAccounts}`);
   } catch (err) { console.error('History cleanup failed:', err.message); }
 }
 

@@ -41,3 +41,10 @@ This version = the redesigned bot (Shop / History / Deposit / Support inline men
 * If the old bot was left in Maintenance mode, that flag is in the database, so this version also starts in Maintenance mode: customers get the notice, admins can use everything. Test as admin, then switch it off in Panel > Settings > Maintenance.
 * Customers with the old bottom keyboard can keep tapping it until their next /start - the old labels are mapped to the new screens. Extra "Menu buttons" you made in the old bot now show inside Support.
 * Order history clean-up (Settings > Help & Data: `history_auto`) is the same as in the old bot - it is not new, and you can switch it off there.
+
+## Third database (optional) + clean-up
+* `MONGODB_URI_STORE` = a third MongoDB. When set, the **Telegram accounts (sessions, sale history)** and the **admin Activity Log** live there, so the main database (users, balances, orders, services) stays small. When it is NOT set, they stay in the main database as before. Switching it on does not move old data: Activity-Log rows already in the main DB just age out; Telegram accounts you already added must be re-added (or tell me and I'll write a one-time copy script). If the store DB is down the bot says so politely and the rest of the bot keeps working.
+* Sold Telegram accounts are deleted `tgacc_keep_days` days after the sale (default 30, never earlier than 11; 0 = keep) - Panel > Settings > Help & Data. Unsold stock is never touched. Buyers only see their History for 10 days.
+* Panel > Deposits: 🗑 on every approved/rejected record, and a bulk clean-up box (status + older-than-N-days, with preview). Pending requests cannot be deleted and balances are never changed.
+* Speed: Shop button price cached 10 s, new indexes (TG accounts; Orders by user/date and status/date).
+* Profile link opens the account's **profile page** (`t.me/<username>?profile`). An account with no username falls back to `tg://user?id=…`, which only opens if your Telegram already knows that user.

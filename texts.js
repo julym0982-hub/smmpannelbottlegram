@@ -134,6 +134,7 @@ EXAMPLES (Burmese tone)
   topup_rejected: '❌ သင့်ငွေဖြည့်တောင်းဆိုမှု (${amount} ကျပ်) ကို လက်မခံနိုင်ပါရှင့်။${reason}\nမှားယွင်းနေသည်ဟု ထင်ပါက Admin ကို ဆက်သွယ်ပေးပါနော်။',
   topup_edited: 'သင်ဖြည့်ထားသောငွေပမာဏမှာ ${amount} ဖြစ်သောကြောင့် သင့်အကောင့်ထဲသို့ ${amount} ကျပ် ထည့်ပေးထားပါတယ်ရှင့် ❤️',
   // ---- Telegram Account shop
+  tgacc_keep_days: '30', // sold Telegram accounts (session, 2step, record) are deleted this many days after the sale; 0 = never
   tgacc_enabled: '1', // 1 = on, 0 = shop button says "closed"
   tgacc_instock: '📱 <b>Telegram Account</b>\n\n✅ Account Instock',
   tgacc_out: '📱 <b>Telegram Account</b>\n\n😔 အကောင့်ကုန်နေပါသည်',

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const store = require('./store'); // main DB, or the optional 3rd DB (MONGODB_URI_STORE)
 
 const UserSchema = new mongoose.Schema({
   _id: { type: String }, // telegram id as string
@@ -88,6 +89,8 @@ const OrderSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
+OrderSchema.index({ userId: 1, createdAt: -1 }); // a customer's history list + "keep newest N" in the clean-up
+OrderSchema.index({ status: 1, createdAt: 1 });   // history clean-up scan
 
 const CouponSchema = new mongoose.Schema({
   _id: { type: String }, // the code itself
@@ -203,16 +206,19 @@ const TgAccountSchema = new mongoose.Schema({
   lastCodeAt: Date,
   createdAt: { type: Date, default: Date.now }
 });
+TgAccountSchema.index({ status: 1, createdAt: 1 });                // next account to sell
+TgAccountSchema.index({ soldTo: 1, status: 1, hidden: 1, soldAt: -1 }); // a buyer's history list
+TgAccountSchema.index({ status: 1, soldAt: 1 });                    // old sold-account clean-up
 
 module.exports = {
-  TgAccount: mongoose.model('TgAccount', TgAccountSchema),
+  TgAccount: store.db.model('TgAccount', TgAccountSchema),
   ApiKey: mongoose.model('ApiKey', ApiKeySchema),
   AiUsage: mongoose.model('AiUsage', AiUsageSchema),
   HelpRequest: mongoose.model('HelpRequest', HelpRequestSchema),
   Counter: mongoose.model('Counter', CounterSchema),
   Stat: mongoose.model('Stat', StatSchema),
   Deposit: mongoose.model('Deposit', DepositSchema),
-  AdminLog: mongoose.model('AdminLog', AdminLogSchema),
+  AdminLog: store.db.model('AdminLog', AdminLogSchema),
   MenuButton: mongoose.model('MenuButton', MenuButtonSchema),
   Platform: mongoose.model('Platform', PlatformSchema),
   User: mongoose.model('User', UserSchema),
