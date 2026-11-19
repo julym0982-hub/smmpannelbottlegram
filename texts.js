@@ -41,6 +41,12 @@ const DEFAULTS = {
   history_keep_days: '5', // finished orders older than this many days are removed...
   history_keep_last: '6', // ...except each user's newest N orders, which always stay
   history_last_cleanup: '',
+  // ---- Maintenance mode (edited from Panel > Settings > Maintenance)
+  maintenance_on: '0', // 1 = customers cannot use the bot (admins still can), 0 = normal
+  maintenance_reason: '', // why the bot is under maintenance (shown to customers)
+  maintenance_duration_value: '', // plain number typed by the admin, e.g. 30
+  maintenance_duration_unit: 'minute', // 'minute' or 'hour'
+  maintenance_msg: '🛠 Maintenance\n\nAdmin မှ Bot အား ပြုပြင်ပြောင်းလဲမှုများ လုပ်ဆောင်နေပါသဖြင့် ခဏ Maintenance လုပ်ဆောင်ထားပါသည်\n\n📝 အကြောင်းအရင်း - ${reason}\n\n⏱ ကြာချိန် : ${duration}',
   // ---- Help Order messages
   help_ask_id: '🆘 Order အကူအညီ\n\nအကူအညီလိုတဲ့ Order ID ကို ရိုက်ထည့်ပေးပါရှင့်၊ (သို့) အောက်က နောက်ဆုံး order တွေထဲကနေ ရွေးပါ 👇',
   help_choose: 'ဘာလေးအဆင်မပြေလဲ ရွေးပေးပါရှင့် ⬇️',
@@ -170,4 +176,28 @@ function allKeys() {
   return Object.keys(DEFAULTS);
 }
 
-module.exports = { t, getRaw, setText, resetText, preload, allKeys, DEFAULTS };
+// ---- Maintenance mode -------------------------------------------------
+const MAINT_UNITS = { minute: 'မိနစ်', hour: 'နာရီ' };
+function maintenanceDurationText() {
+  const v = String(getRaw('maintenance_duration_value') || '').trim();
+  const unit = MAINT_UNITS[getRaw('maintenance_duration_unit')] || MAINT_UNITS.minute;
+  return v ? `${v} ${unit}` : 'ခဏအတွင်း';
+}
+// { on, reason, durationValue, durationUnit, duration, text } - text is exactly what customers get.
+// reason/duration are admin-typed, so they are substituted with render() (single pass: a "${x}"
+// typed by the admin is never re-evaluated as a placeholder).
+function maintenance() {
+  const reason = String(getRaw('maintenance_reason') || '').trim();
+  const duration = maintenanceDurationText();
+  return {
+    on: getRaw('maintenance_on') === '1',
+    reason,
+    durationValue: String(getRaw('maintenance_duration_value') || '').trim(),
+    durationUnit: MAINT_UNITS[getRaw('maintenance_duration_unit')] ? getRaw('maintenance_duration_unit') : 'minute',
+    duration,
+    template: getRaw('maintenance_msg'),
+    text: render(getRaw('maintenance_msg'), { reason: reason || '-', duration })
+  };
+}
+
+module.exports = { t, getRaw, setText, resetText, preload, allKeys, maintenance, DEFAULTS };

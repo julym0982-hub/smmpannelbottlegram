@@ -174,7 +174,9 @@ const STATUS_FILTERS = {
 const SETTABLE_STATUS = { pending: 'pending', processing: 'Processing', 'in progress': 'In progress', completed: 'Completed', partial: 'Partial', canceled: 'Canceled' };
 
 // feature switches + retention knobs (shown on the Settings > Data tab, not as bot messages)
-const FEATURE_KEYS = ['help_enabled', 'history_auto', 'history_keep_days', 'history_keep_last', 'history_last_cleanup'];
+// maintenance mode has its own endpoint (GET/POST /maintenance) - these keys stay out of the generic settings forms
+const MAINT_KEYS = ['maintenance_on', 'maintenance_reason', 'maintenance_duration_value', 'maintenance_duration_unit'];
+const FEATURE_KEYS = ['help_enabled', 'history_auto', 'history_keep_days', 'history_keep_last', 'history_last_cleanup', ...MAINT_KEYS];
 const PAYMENT_KEYS = ['kpay_number', 'kpay_name', 'wave_number', 'wave_name', 'topup_min_amount', 'low_balance_threshold'];
 const NUMERIC_KEYS = () => [
   'topup_min_amount', 'low_balance_threshold',
@@ -414,6 +416,7 @@ module.exports = function mountAdminPanel(app, deps) {
       today: { revenue: t.revenue, profit: t.profit, deposits: depToday[0] ? depToday[0].sum : 0, depositCount: depToday[0] ? depToday[0].n : 0 },
       week,
       alerts: { pendingDeposits, problemOrders, openHelp },
+      maintenance: texts.maintenance().on,
       userBalances: liability[0] ? liability[0].sum : 0,
       days
     });
@@ -991,7 +994,7 @@ module.exports = function mountAdminPanel(app, deps) {
     if (!entries.length || entries.length > 40) throw fail(400, 'values မမှန်ပါ');
     // validate everything first so a bad value never leaves a half-applied change
     for (const [k, v] of entries) {
-      if (!texts.allKeys().includes(k) || k === 'history_last_cleanup' || ai.SETTING_KEYS.includes(k)) throw fail(400, `"${k}" ဆိုတဲ့ key မရှိပါ`);
+      if (!texts.allKeys().includes(k) || k === 'history_last_cleanup' || MAINT_KEYS.includes(k) || ai.SETTING_KEYS.includes(k)) throw fail(400, `"${k}" ဆိုတဲ့ key မရှိပါ`);
       if (typeof v !== 'string' && typeof v !== 'number') throw fail(400, `${k} မမှန်ပါ`);
       const sv = String(v).trim();
       if (k === 'help_enabled' || k === 'history_auto') {
@@ -1019,6 +1022,36 @@ module.exports = function mountAdminPanel(app, deps) {
     await texts.resetText(key);
     log(req, 'settings_reset', key);
     res.json({ ok: true, value: texts.getRaw(key) });
+  }));
+
+  // ======================================================================
+  // Maintenance mode: while ON, customers only get the maintenance notice
+  // (reason + duration written here); admins keep full access.
+  // ======================================================================
+  const maintenanceState = () => {
+    const m = texts.maintenance();
+    return { on: m.on, reason: m.reason, durationValue: m.durationValue, durationUnit: m.durationUnit, template: m.template };
+  };
+  api.get('/maintenance', wrap(async (req, res) => res.json(maintenanceState())));
+
+  api.post('/maintenance', wrap(async (req, res) => {
+    if (typeof req.body.on !== 'boolean') throw fail(400, 'on မမှန်ပါ');
+    const on = req.body.on;
+    if (on) {
+      const reason = str(req.body.reason, 'အကြောင်းအရင်း', { max: 500 });
+      const value = num(req.body.durationValue, 'ကြာချိန်', { min: 1, max: 9999, int: true });
+      const unit = req.body.durationUnit;
+      if (!['minute', 'hour'].includes(unit)) throw fail(400, 'ကြာချိန် unit (မိနစ်/နာရီ) မမှန်ပါ');
+      await texts.setText('maintenance_reason', reason);
+      await texts.setText('maintenance_duration_value', String(value));
+      await texts.setText('maintenance_duration_unit', unit);
+      await texts.setText('maintenance_on', '1');
+      log(req, 'maintenance_on', `${value} ${unit} - ${reason}`);
+    } else {
+      await texts.setText('maintenance_on', '0'); // reason/duration stay saved so they can be reused next time
+      log(req, 'maintenance_off', '');
+    }
+    res.json({ ok: true, ...maintenanceState() });
   }));
 
   api.post('/menu-buttons', wrap(async (req, res) => {

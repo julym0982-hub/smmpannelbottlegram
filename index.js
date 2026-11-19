@@ -322,6 +322,18 @@ bot.use(async (ctx, next) => {
 
       const u = await getOrCreateUser(ctx.from);
       if (u.banned && !isAdmin(ctx.from.id)) return ctx.reply(texts.t('banned'));
+
+      // Maintenance mode (Panel > Settings > Maintenance): customers get the maintenance
+      // notice whatever they use - menu buttons, inline buttons, typed text, AI chat, photos.
+      // Admins are never blocked so they can keep working/testing. Block/unblock events
+      // (my_chat_member) still pass so the "blocked the bot" bookkeeping stays correct.
+      if (!isAdmin(ctx.from.id) && ctx.updateType !== 'my_chat_member') {
+        const m = texts.maintenance();
+        if (m.on) {
+          if (ctx.callbackQuery) await ctx.answerCbQuery('🛠 Maintenance လုပ်ဆောင်နေပါသည်').catch(() => {});
+          return ctx.reply(m.text);
+        }
+      }
       ctx.dbUser = u;
     }
     await next();
