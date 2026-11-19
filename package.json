@@ -11,6 +11,7 @@
     "express": "^4.19.2",
     "axios": "^1.7.2",
     "dotenv": "^16.4.5",
-    "mongoose": "^8.5.0"
+    "mongoose": "^8.5.0",
+    "telegram": "^2.26.16"
   }
 }

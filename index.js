@@ -2,7 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const { Telegraf, Markup } = require('telegraf');
-const { MenuButton, Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, HelpRequest, Counter } = require('./models');
+const { MenuButton, Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, HelpRequest, Counter, TgAccount } = require('./models');
+const tgSession = require('./tg-session');
 const providers = require('./providers');
 const texts = require('./texts');
 const mountAdminPanel = require('./admin');
@@ -138,13 +139,25 @@ function isFlooding(userId) {
 // ---------------------------------------------------------------------
 // keyboards
 // ---------------------------------------------------------------------
-const BTN_SERVICES = '❤️ရရှိနိုင်သောservice များ❤️';
-const BTN_BALANCE = '💰လက်ကျန်ငွေ💰';
-const BTN_TOPUP = '💰ငွေဖြည့်ရန်💰';
-const BTN_HISTORY = '📜Order History📜';
-const BTN_COUPON = 'Cupon⁉️';
-const BTN_BACK = '◀️ နောက်ပြန်ဆုတ်ရန်';
-const BTN_HELP = '🆘 Order အကူအညီ';
+// New simple home menu (bottom keyboard): only these 4 buttons
+//   Shop     History
+//   Deposit  Support
+// Everything else (platforms, categories, services, help...) is shown with
+// INLINE buttons under the bot's messages - the bottom keyboard never changes.
+const BTN_SHOP = '🛍 Shop';
+const BTN_HISTORY = '📜 History';
+const BTN_DEPOSIT = '💰 Deposit';
+const BTN_SUPPORT = '🆘 Support';
+const LEGACY_SUPPORT = '🛟 Support'; // old bottom-keyboard label
+// Old keyboard texts: people who still have the OLD keyboard on their phone
+// can keep tapping it until they send /start - these map to the new screens.
+const LEGACY_SERVICES = '❤️ရရှိနိုင်သောservice များ❤️';
+const LEGACY_BALANCE = '💰လက်ကျန်ငွေ💰';
+const LEGACY_TOPUP = '💰ငွေဖြည့်ရန်💰';
+const LEGACY_HISTORY = '📜Order History📜';
+const LEGACY_COUPON = 'Cupon⁉️';
+const LEGACY_BACK = '◀️ နောက်ပြန်ဆုတ်ရန်';
+const LEGACY_HELP = '🆘 Order အကူအညီ';
 
 // HTML-safe text for messages that contain user-provided strings (links, names)
 function esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -170,13 +183,9 @@ async function migrateOrderNos() {
   }
 }
 
+// async only so every existing `await mainMenuKeyboard()` call keeps working
 async function mainMenuKeyboard() {
-  const extras = await MenuButton.find({});
-  const rows = [[BTN_SERVICES], [BTN_BALANCE], [BTN_TOPUP], [BTN_HISTORY]];
-  if (helpOn()) rows.push([BTN_HELP]);
-  rows.push([BTN_COUPON]);
-  for (const b of extras) rows.push([b._id]);
-  return Markup.keyboard(rows).resize();
+  return Markup.keyboard([[BTN_SHOP, BTN_HISTORY], [BTN_DEPOSIT, BTN_SUPPORT]]).resize();
 }
 function topupMethodKeyboard() {
   return Markup.inlineKeyboard([
@@ -361,7 +370,7 @@ const ADMIN_GUIDE = [
 
 `👑 Admin Guide (၂/၇) — Home button ဆောက်ခြင်း
 
-Home button ဆိုတာက user တွေ ❤️ရရှိနိုင်သောservice များ❤️ နှိပ်တာနဲ့ အရင်ဆုံး မြင်ရမယ့် ခလုတ်တွေပါ (ဥပမာ - "Telegram Service", "Tiktok Service")
+Home button ဆိုတာက user တွေ 🛍 Shop → 🚀 Boost Service နှိပ်တာနဲ့ အရင်ဆုံး မြင်ရမယ့် inline ခလုတ်တွေပါ (ဥပမာ - "Telegram Service", "Tiktok Service")
 
 **Command**: /addhomebutton <key> <label...>
 - key = internal name (English small letter, space မပါရ) ဥပမာ telegram
@@ -372,7 +381,7 @@ Home button ဆိုတာက user တွေ ❤️ရရှိနိုင်�
 /addhomebutton tiktok Tiktok Service
 /addhomebutton facebook Facebook Service
 
-ဒါဆို user ❤️ရရှိနိုင်သောservice များ❤️ နှိပ်တာနဲ့ Telegram/Tiktok/Facebook ဆိုတဲ့ button ၃ ခု (bold) မြင်ရပါပြီ။
+ဒါဆို user 🛍 Shop → 🚀 Boost Service နှိပ်တာနဲ့ Telegram/Tiktok/Facebook ဆိုတဲ့ inline button ၃ ခု (bold) မြင်ရပါပြီ။
 
 ဖျက်ရန်: /removehomebutton telegram (category/service အားလုံးပါ ပါ ဖျက်မည်)`,
 
@@ -462,7 +471,7 @@ Home button ထဲကို service (ဥပမာ ♥️,👍 reaction emoji, �
 ဥပမာ: /couponinfo WELCOME100
 (ဒါက ထုတ်ထားသောစုစုပေါင်း၊ သုံးပြီးသားအရေအတွက်၊ ကျန်ရှိအရေအတွက်၊ ပြီးသုံးထားသူများ၏ နာမည်+id list ကို ပြပေးမည်)
 
-**Main menu ထဲ button အသစ် ထည့်ရန်** (ဥပမာ - "Contact Admin" နှိပ်ရင် admin ရဲ့ Telegram chat ကို ရောက်စေရန်):
+**🆘 Support ထဲ Admin button ထည့်ရန်** (user က Support နှိပ်ရင် "🆘 Order အကူအညီ" နဲ့ ဒီ Admin button ၂ ခု မြင်ရမည်။ Admin ရဲ့ Telegram chat ကို တန်းရောက်စေရန်):
 /addmenubutton ☎️ Contact Admin|https://t.me/YourAdminUsername
 (YourAdminUsername နေရာမှာ ကိုယ့် Telegram username ကို အစားထိုးပါ)
 
@@ -497,41 +506,19 @@ bot.start(async (ctx) => {
 });
 
 // =======================================================================
-// Back button - context-aware based on state.level
+// Main menu buttons: Shop | History | Deposit | Support
 // =======================================================================
-bot.hears(BTN_BACK, async (ctx) => {
-  const s = st(ctx.from.id);
-  if (s.level === 'platform') {
-    resetState(ctx.from.id);
-    return ctx.reply('🏠 မူလ menu သို့ ပြန်သွားပါပြီရှင့်', await mainMenuKeyboard());
-  }
-  if (s.level === 'category') {
-    s.level = 'platform';
-    return showPlatformMenu(ctx);
-  }
-  if (s.level === 'service') {
-    s.level = 'category';
-    return showCategoryMenu(ctx, s.platform);
-  }
-  // link / quantity / topup / coupon / anything else -> just cancel back to main menu
+// old "◀️ နောက်ပြန်ဆုတ်ရန်" key still on someone's old keyboard -> give them the new 4-button menu
+bot.hears(LEGACY_BACK, async (ctx) => {
   resetState(ctx.from.id);
   return ctx.reply('🏠 မူလ menu သို့ ပြန်သွားပါပြီရှင့်', await mainMenuKeyboard());
 });
 
-// =======================================================================
-// Main menu buttons
-// =======================================================================
-bot.hears(BTN_SERVICES, async (ctx) => { resetState(ctx.from.id); st(ctx.from.id).level = 'platform'; await showPlatformMenu(ctx); });
+bot.hears([BTN_SHOP, LEGACY_SERVICES, LEGACY_BALANCE], async (ctx) => { resetState(ctx.from.id); await showShopHome(ctx); });
 
-bot.hears(BTN_BALANCE, async (ctx) => {
-  const name = displayName(ctx.from);
-  await ctx.reply(
-    texts.t('balance_msg', { name, balance: ctx.dbUser.balance }),
-    Markup.inlineKeyboard([[Markup.button.callback('ငွေထည့်ရန်', 'go_topup')]])
-  );
-});
+bot.hears([BTN_DEPOSIT, LEGACY_TOPUP], async (ctx) => { resetState(ctx.from.id); await ctx.reply('ငွေဖြည့်မည့် နည်းလမ်း ရွေးပါရှင့် ❤️', topupMethodKeyboard()); });
 
-bot.hears(BTN_TOPUP, async (ctx) => { resetState(ctx.from.id); await ctx.reply('ငွေဖြည့်မည့် နည်းလမ်း ရွေးပါရှင့် ❤️', topupMethodKeyboard()); });
+bot.hears([BTN_SUPPORT, LEGACY_SUPPORT], async (ctx) => { resetState(ctx.from.id); await showSupport(ctx); });
 
 // paginated, tidy order history (5 per page) with copyable order numbers
 async function sendHistory(ctx, page = 1, edit = false) {
@@ -565,6 +552,7 @@ async function sendHistory(ctx, page = 1, edit = false) {
     if (page < pages) nav.push(Markup.button.callback('ရှေ့ ▶️', `hist_${page + 1}`));
     rows.push(nav);
   }
+  rows.push([Markup.button.callback('◀️ Back', 'hist_menu')]);
   const extra = { parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: Markup.inlineKeyboard(rows).reply_markup };
   const text = lines.join('\n\n');
   if (edit) {
@@ -572,12 +560,12 @@ async function sendHistory(ctx, page = 1, edit = false) {
   }
   return ctx.reply(text, extra);
 }
-bot.hears(BTN_HISTORY, async (ctx) => { resetState(ctx.from.id); await sendHistory(ctx, 1); });
+bot.hears([BTN_HISTORY, LEGACY_HISTORY], async (ctx) => { resetState(ctx.from.id); await showHistoryMenu(ctx); });
 bot.action(/^hist_(\d+)$/, async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await sendHistory(ctx, parseInt(ctx.match[1], 10), true); });
 bot.action('noop', (ctx) => ctx.answerCbQuery().catch(() => {}));
 
-bot.hears(BTN_COUPON, async (ctx) => { st(ctx.from.id).level = 'coupon'; await ctx.reply(COUPON_PROMPT); });
-// inline "Enter Cupon Code" button under admin coupon messages - same as the home menu button
+bot.hears(LEGACY_COUPON, async (ctx) => { st(ctx.from.id).level = 'coupon'; await ctx.reply(COUPON_PROMPT); });
+// inline "Enter Cupon Code" button under admin coupon messages (the coupon button left the home menu)
 bot.action('enter_coupon', async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
   st(ctx.from.id).level = 'coupon';
@@ -585,51 +573,341 @@ bot.action('enter_coupon', async (ctx) => {
 });
 
 // =======================================================================
-// Platform -> Category -> Service navigation (bottom keyboard, scrollable)
+// Shop -> Boost Service -> Platform -> Category -> Service
+// Everything here is INLINE buttons under the bot's message (the message is
+// edited in place when a button is tapped, with a "back" button each step).
+// The bottom keyboard is never touched, so it always stays Shop/History/Deposit/Support.
 // =======================================================================
-async function showPlatformMenu(ctx) {
-  const platforms = await Platform.find({}).sort({ _id: 1 }).lean();
-  if (!platforms.length) {
-    return ctx.reply(isAdmin(ctx.from.id)
-      ? '😔 Home button တစ်ခုမှ မထည့်ရသေးပါ။ Admin က /addhomebutton ဖြင့် စထည့်နိုင်ပါတယ်။'
-      : '😔 Service များ မကြာမီ ထည့်ပေးပါမယ်ရှင့်။'
-    );
+const tgUrlOk = (u) => /^(https?:\/\/|tg:\/\/)/i.test(String(u || ''));
+
+// edit the message the button is under; fall back to a fresh message
+// (used after /start-less text taps, or when the old message is too old to edit)
+async function showInline(ctx, text, kb) {
+  const extra = { parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: kb.reply_markup };
+  if (ctx.callbackQuery) {
+    try { return await ctx.editMessageText(text, extra); }
+    catch (err) {
+      if (/not modified/i.test(String(err && err.message))) return;
+      /* too old / not editable -> send a new one */
+    }
   }
-  const rows = chunk(platforms.map(p => p.label), 2);
-  rows.push([BTN_BACK]);
-  await ctx.reply(texts.t('choose_platform'), Markup.keyboard(rows).resize());
+  return ctx.reply(text, extra);
 }
 
-async function showCategoryMenu(ctx, platform) {
-  const cats = await Category.find({ platform }).lean();
-  if (!cats.length) {
-    return ctx.reply(isAdmin(ctx.from.id)
-      ? `😔 "${platform}" အတွက် category မထည့်ရသေးပါ။ Admin က /addid (သို့) /addbutton ဖြင့် ထည့်နိုင်ပါတယ်။`
-      : '😔 ဒီ Service အတွက် ခဏနေမှ ထည့်ပေးပါမယ်ရှင့်။'
-    );
-  }
-  const rows = chunk(cats.map(c => c.label), 3);
-  rows.push([BTN_BACK]);
-  const s = st(ctx.from.id);
-  s.level = 'category'; s.platform = platform;
-  await ctx.reply(texts.t('choose_category'), Markup.keyboard(rows).resize());
+// short labels (emoji services) go 3 per row, long labels one per row
+function labelRows(buttons, labels) {
+  const short = labels.every(l => String(l).length <= 8);
+  return chunk(buttons, short ? 3 : 1);
 }
+
+// ---- Shop home: name / username / balance + 2 inline buttons ----
+async function showShopHome(ctx) {
+  const u = ctx.dbUser || await User.findById(String(ctx.from.id));
+  const name = displayName(ctx.from);
+  const uname = ctx.from.username ? '@' + sanitizeName(ctx.from.username) : '-';
+  const text =
+    `👤 <b>${esc(name)}</b>\n` +
+    `🔖 Username : ${esc(uname)}\n` +
+    `💰 Balance : <b>${nf(u && u.balance)}</b> ကျပ်\n\n` +
+    `👇 ဝယ်ယူလိုသည့် ဝန်ဆောင်မှု ရွေးပါရှင့်`;
+  // price on the button = price of the NEXT account that would be sold (oldest in stock)
+  const nextAcc = await TgAccount.findOne({ status: 'available' }).sort({ createdAt: 1 }).select('price').lean();
+  const tgLabel = nextAcc && nextAcc.price && texts.getRaw('tgacc_enabled') !== '0' ? `Telegram Account———${nextAcc.price}KS` : 'Telegram Account';
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback(tgLabel, 'tg_account')],
+    [Markup.button.callback('🚀 Boost Service', 'boost')]
+  ]);
+  return showInline(ctx, text, kb);
+}
+bot.action('shop_home', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); st(ctx.from.id).level = 'root'; await showShopHome(ctx); });
+
+// ---- Telegram Account shop -------------------------------------------------
+// Shop: [Buy Account] -> name/balance/price + [ဝယ်မည်] -> phone + 2step psw + [Get Otp]
+// History > Account ဝယ်ယူမှုမှတ်တမ်း -> number -> [Profile] [Code ယူရန်] [Remove From History]
+// Phone / session / 2step / price are added per account in Admin Panel > TG Accounts.
+const TGACC_MAX_CODE_REQUESTS = parseInt(process.env.TGACC_MAX_CODE_REQUESTS || '40', 10);
+const TGACC_HISTORY_DAYS = 10;
+const tgCodeCooldown = new Map(); // userId -> last code request (ms)
+const tgBuying = new Set();       // users with a purchase in progress (stops double taps)
+const OID = '([0-9a-f]{24})';
+const tgPwOf = (acc) => { try { return acc.twoStepEnc ? ai.decrypt(acc.twoStepEnc) : ''; } catch (_) { return ''; } };
+const copyBtn = (label, text) => ({ text: label, copy_text: { text: String(text).slice(0, 256) } });
+const tgBoughtText = (acc) => texts.t('tgacc_bought', { phone: esc(acc.phone), pw: esc(tgPwOf(acc) || 'မရှိပါ') });
+const tgOwned = (ctx, id) => TgAccount.findOne({ _id: id, soldTo: String(ctx.from.id), status: 'sold' });
+const tgHomeBack = () => Markup.inlineKeyboard([[Markup.button.callback('◀️ နောက်ပြန်', 'shop_home')]]);
+
+// ---- shop screen
+async function showTgAccountOffer(ctx) {
+  if (texts.getRaw('tgacc_enabled') === '0') return showInline(ctx, '📱 Telegram Account ကို ခေတ္တပိတ်ထားပါသည်ရှင့်။', tgHomeBack());
+  const stock = await TgAccount.countDocuments({ status: 'available' });
+  if (stock < 1) return showInline(ctx, texts.t('tgacc_out'), Markup.inlineKeyboard([[Markup.button.callback('Out Of Stock', 'tgacc_oos')], [Markup.button.callback('◀️ Back', 'shop_home')]]));
+  return showInline(ctx, texts.t('tgacc_instock'), Markup.inlineKeyboard([[Markup.button.callback('Buy Account', 'tgacc_buy')], [Markup.button.callback('◀️ Back', 'shop_home')]]));
+}
+bot.action('tg_account', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await showTgAccountOffer(ctx); });
+bot.action('tgacc_oos', (ctx) => ctx.answerCbQuery('အကောင့်ကုန်နေပါသည်', { show_alert: true }).catch(() => {}));
+
+// ---- Buy Account: show balance + price of the next account in line
+bot.action('tgacc_buy', async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  if (texts.getRaw('tgacc_enabled') === '0') return showTgAccountOffer(ctx);
+  const acc = await TgAccount.findOne({ status: 'available' }).sort({ createdAt: 1 }).lean();
+  if (!acc) return showTgAccountOffer(ctx);
+  const u = ctx.dbUser || await User.findById(String(ctx.from.id));
+  const text = texts.t('tgacc_confirm', { name: esc(displayName(ctx.from)), balance: nf(u && u.balance), price: nf(acc.price) });
+  return showInline(ctx, text, Markup.inlineKeyboard([[Markup.button.callback('ဝယ်မည်', `tgacc_go_${acc._id}`)], [Markup.button.callback('◀️ Back', 'tg_account')]]));
+});
+
+// ---- ဝယ်မည်: claim THAT account, take its price, hand over phone + 2step
+bot.action(new RegExp(`^tgacc_go_${OID}$`), async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const uid = String(ctx.from.id);
+  if (tgBuying.has(uid)) return;
+  tgBuying.add(uid);
+  try {
+    const acc = await TgAccount.findOneAndUpdate(
+      { _id: ctx.match[1], status: 'available' },
+      { $set: { status: 'sold', soldTo: uid, soldAt: new Date(), hidden: false } },
+      { new: true }
+    );
+    if (!acc) return showTgAccountOffer(ctx); // someone else got it first / admin removed it
+    const price = Math.max(0, Number(acc.price) || 0);
+    const charged = await User.findOneAndUpdate(
+      { _id: uid, balance: { $gte: price } },
+      { $inc: { balance: -price, totalSpent: price } },
+      { new: true }
+    );
+    if (!charged) {
+      await TgAccount.updateOne({ _id: acc._id }, { $set: { status: 'available' }, $unset: { soldTo: '', soldAt: '' } });
+      return ctx.reply(texts.t('insufficient_balance', { name: displayName(ctx.from) }),
+        Markup.inlineKeyboard([[Markup.button.callback('💰ငွေဖြည့်ရန်💰', 'go_topup')]]));
+    }
+    await showInline(ctx, tgBoughtText(acc), Markup.inlineKeyboard([[Markup.button.callback('Get Otp', `tgacc_otp_${acc._id}`)], [Markup.button.callback('◀️ Back', 'shop_home')]]));
+    const left = await TgAccount.countDocuments({ status: 'available' });
+    for (const id of ADMIN_IDS) await safeSend(id, `📱 Telegram Account ရောင်းရပါပြီ\n+${acc.phone} → ${displayName(ctx.from)} (${uid})\n💰 ${nf(price)} ကျပ် · လက်ကျန် ${left} Acc`).catch(() => {});
+  } catch (err) {
+    console.error('tgacc_go failed:', err && err.message || err);
+    await ctx.reply(customerError()).catch(() => {});
+  } finally { tgBuying.delete(uid); }
+});
+
+// ---- new-device login notice: after a code is handed out, watch the account's
+// Telegram service chat for 5 min and forward "New login..." to the buyer.
+const TGACC_WATCH_MIN = 5, TGACC_MAX_WATCHERS = 30;
+const tgWatchers = new Map(); // accountId -> { until }
+function startTgWatch(acc, uid) {
+  const id = String(acc._id);
+  const until = Date.now() + TGACC_WATCH_MIN * 60 * 1000;
+  const running = tgWatchers.get(id);
+  if (running) { running.until = until; return; }
+  if (!tgSession.configured() || tgWatchers.size >= TGACC_MAX_WATCHERS) return;
+  const state = { until };
+  tgWatchers.set(id, state);
+  tgSession.watchNewLogin(ai.decrypt(acc.sessionEnc), state, async (text) => {
+    await bot.telegram.sendMessage(uid, texts.t('tgacc_newlogin', { phone: esc(acc.phone), text: esc(text) }), { parse_mode: 'HTML' }).catch(() => {});
+  }).catch((err) => console.error('tgacc watch failed:', err && err.message || err))
+    .finally(() => tgWatchers.delete(id));
+}
+
+// ---- reading a code (Get Otp / 5min code / old latest code)
+// mode: otp | c5 (last 5 min) | old (newest ever)
+async function runTgCode(ctx, accId, mode) {
+  const uid = String(ctx.from.id);
+  const acc = await tgOwned(ctx, accId);
+  if (!acc) return ctx.answerCbQuery('❌ ဒီ Account မတွေ့ပါ', { show_alert: true }).catch(() => {});
+  const wait = 8000 - (Date.now() - (tgCodeCooldown.get(uid) || 0));
+  if (wait > 0) return ctx.answerCbQuery(texts.t('tgacc_code_wait', { sec: Math.ceil(wait / 1000) }), { show_alert: true }).catch(() => {});
+  if ((acc.codeRequests || 0) >= TGACC_MAX_CODE_REQUESTS) return ctx.answerCbQuery('Code တောင်းခွင့် ပြည့်သွားပါပြီ - Admin ကို ဆက်သွယ်ပါ', { show_alert: true }).catch(() => {});
+  tgCodeCooldown.set(uid, Date.now());
+  await ctx.answerCbQuery().catch(() => {});
+
+  const wk = mode === 'otp' ? 'tgacc_checking_otp' : mode === 'c5' ? 'tgacc_checking_code' : 'tgacc_checking_old';
+  const note = await ctx.reply(texts.t(wk));
+  const chatId = note.chat.id, msgId = note.message_id;
+  const editNote = (t, extra) => bot.telegram.editMessageText(chatId, msgId, undefined, t, Object.assign({ parse_mode: 'HTML' }, extra || {})).catch(() => {});
+
+  let found;
+  try {
+    found = await tgSession.latestLoginCode(ai.decrypt(acc.sessionEnc), mode === 'old' ? Infinity : 5);
+  } catch (err) {
+    console.error('tgacc get code failed:', err && err.message || err);
+    for (const id of ADMIN_IDS) await safeSend(id, `⚠️ TG Account +${acc.phone} ရဲ့ code ဖတ်မရပါ (${String(err && err.message || err).slice(0, 150)})\nPanel > TG Accounts မှာ session ကို စစ်ပါ။`).catch(() => {});
+    return editNote(texts.t('tgacc_code_error'));
+  }
+  await TgAccount.updateOne({ _id: acc._id }, { $inc: { codeRequests: 1 }, $set: { lastCodeAt: new Date() } });
+  if (!found) return editNote(texts.t(mode === 'old' ? 'tgacc_none_old' : 'tgacc_none5'));
+
+  await bot.telegram.deleteMessage(chatId, msgId).catch(() => {}); // the "checking..." note disappears
+  const pw = tgPwOf(acc);
+  if (mode !== 'old') startTgWatch(acc, uid); // forward the "New login" notice that follows
+  if (mode === 'otp') {
+    const kb = pw ? [[copyBtn('💌 Copy 2step psw', pw)]] : [];
+    return ctx.reply(texts.t('tgacc_otp_ok', { code: found.code }), { parse_mode: 'HTML', reply_markup: { inline_keyboard: kb } });
+  }
+  const secs = Math.max(0, Math.round((Date.now() - found.date.getTime()) / 1000));
+  const ago = secs < 60 ? `${secs} စက္ကန့်` : secs < 3600 ? `${Math.round(secs / 60)} မိနစ်` : secs < 86400 ? `${Math.round(secs / 3600)} နာရီ` : `${Math.round(secs / 86400)} ရက်`;
+  const row = [copyBtn('💌 Copy Code', found.code)];
+  if (pw) row.push(copyBtn('💌 Copy 2Step', pw));
+  return ctx.reply(texts.t(mode === 'old' ? 'tgacc_code_ok_old' : 'tgacc_code_ok', { code: found.code, ago }), { parse_mode: 'HTML', reply_markup: { inline_keyboard: [row] } });
+}
+// tgacc_code_ = button on messages sent by the first version of this feature
+bot.action(new RegExp(`^tgacc_(?:otp|code)_${OID}$`), (ctx) => runTgCode(ctx, ctx.match[1], 'otp'));
+bot.action(new RegExp(`^tgacc_c5_${OID}$`), (ctx) => runTgCode(ctx, ctx.match[1], 'c5'));
+bot.action(new RegExp(`^tgacc_old_${OID}$`), (ctx) => runTgCode(ctx, ctx.match[1], 'old'));
+
+// ---- History: Orders History menu -> Account / Boost
+bot.action('hist_menu', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await showHistoryMenu(ctx); });
+async function showHistoryMenu(ctx) {
+  return showInline(ctx, texts.t('tgacc_hist_menu'), Markup.inlineKeyboard([
+    [Markup.button.callback('Account ဝယ်ယူမှုမှတ်တမ်း', 'tgh_1')],
+    [Markup.button.callback('Boost မှတ်တမ်း', 'hist_boost')]
+  ]));
+}
+bot.action('hist_boost', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await sendHistory(ctx, 1, true); });
+
+async function showTgHistory(ctx, page) {
+  const q = { soldTo: String(ctx.from.id), status: 'sold', hidden: { $ne: true }, soldAt: { $gte: new Date(Date.now() - TGACC_HISTORY_DAYS * 86400000) } };
+  const per = 5;
+  const total = await TgAccount.countDocuments(q);
+  const back = [Markup.button.callback('◀️ နောက်ပြန်', 'hist_menu')];
+  if (!total) return showInline(ctx, '📜 ဝယ်ယူမှုမှတ်တမ်း မရှိသေးပါရှင့်။', Markup.inlineKeyboard([back]));
+  const pages = Math.ceil(total / per);
+  page = Math.min(Math.max(1, page), pages);
+  const list = await TgAccount.find(q).sort({ soldAt: -1 }).skip((page - 1) * per).limit(per).lean();
+  const rows = list.map(a => [Markup.button.callback(`📱 +${a.phone}`, `tgacc_view_${a._id}`)]);
+  if (pages > 1) {
+    const nav = [];
+    if (page > 1) nav.push(Markup.button.callback('◀️ Back', `tgh_${page - 1}`));
+    nav.push(Markup.button.callback(`${page}/${pages}`, 'noop'));
+    if (page < pages) nav.push(Markup.button.callback('Next ▶️', `tgh_${page + 1}`));
+    rows.push(nav);
+  }
+  rows.push(back);
+  return showInline(ctx, texts.t('tgacc_hist'), Markup.inlineKeyboard(rows));
+}
+bot.action(/^tgh_(\d+)$/, async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await showTgHistory(ctx, parseInt(ctx.match[1], 10)); });
+
+// one number: [Profile ကိုကြည့်ရန်] [Code ယူရန်] [Remove From History]
+bot.action(new RegExp(`^tgacc_view_${OID}$`), async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const acc = await tgOwned(ctx, ctx.match[1]);
+  if (!acc) return;
+  return showInline(ctx, `📱 <code>+${esc(acc.phone)}</code>`, Markup.inlineKeyboard([
+    [Markup.button.callback('Profile ကိုကြည့်ရန်', `tgacc_pf_${acc._id}`)],
+    [Markup.button.callback('Code ယူရန်', `tgacc_menu_${acc._id}`)],
+    [Markup.button.callback('Remove From History', `tgacc_rm_${acc._id}`)],
+    [Markup.button.callback('◀️ Back', 'tgh_1')]
+  ]));
+});
+// the link that opens the bought account's own Telegram profile page
+async function tgProfileLink(acc) {
+  if (!acc.tgUserId && !acc.tgUsername && tgSession.configured()) {
+    try { // first time: read it from the session once and remember it
+      const r = await tgSession.checkSession(ai.decrypt(acc.sessionEnc));
+      if (r.ok) { acc.tgUserId = r.id; acc.tgUsername = r.username; await TgAccount.updateOne({ _id: acc._id }, { $set: { tgUserId: r.id, tgUsername: r.username } }); }
+    } catch (err) { console.error('profile lookup failed:', err && err.message || err); }
+  }
+  if (acc.tgUsername) return `https://t.me/${acc.tgUsername}`;
+  if (acc.tgUserId) return `tg://user?id=${acc.tgUserId}`;
+  return `https://t.me/+${acc.phone}`; // fallback: opens by phone number
+}
+bot.action(new RegExp(`^tgacc_pf_${OID}$`), async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const acc = await tgOwned(ctx, ctx.match[1]);
+  if (!acc) return;
+  const link = await tgProfileLink(acc);
+  const pw = tgPwOf(acc);
+  const kb = [[{ text: '👤 Profile Link', url: link }]];
+  if (pw) kb.push([copyBtn('💌 Copy 2Step', pw)]);
+  kb.push([{ text: '◀️ Back', callback_data: `tgacc_view_${acc._id}` }]);
+  return showInline(ctx, tgBoughtText(acc), { reply_markup: { inline_keyboard: kb } });
+});
+bot.action(new RegExp(`^tgacc_menu_${OID}$`), async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const acc = await tgOwned(ctx, ctx.match[1]);
+  if (!acc) return;
+  return ctx.reply(texts.t('tgacc_code_choose'), Markup.inlineKeyboard([
+    [Markup.button.callback('5min code', `tgacc_c5_${acc._id}`), Markup.button.callback('old lastest code', `tgacc_old_${acc._id}`)]
+  ]));
+});
+bot.action(new RegExp(`^tgacc_rm_${OID}$`), async (ctx) => {
+  await ctx.answerCbQuery('History ကနေ ဖယ်ပြီးပါပြီ ✅').catch(() => {});
+  await TgAccount.updateOne({ _id: ctx.match[1], soldTo: String(ctx.from.id) }, { $set: { hidden: true } });
+  return showTgHistory(ctx, 1);
+});
+
+// ---- Boost Service: Facebook / Instagram / TikTok / Telegram ... (the "home buttons" admin created) ----
+async function showPlatformMenu(ctx) {
+  const platforms = await Platform.find({}).sort({ _id: 1 }).lean();
+  const back = [Markup.button.callback('◀️ နောက်ပြန်', 'shop_home')];
+  if (!platforms.length) {
+    return showInline(ctx, isAdmin(ctx.from.id)
+      ? '😔 Platform button တစ်ခုမှ မထည့်ရသေးပါ။ Admin က /addhomebutton ဖြင့် စထည့်နိုင်ပါတယ်။'
+      : '😔 Service များ မကြာမီ ထည့်ပေးပါမယ်ရှင့်။', Markup.inlineKeyboard([back]));
+  }
+  const btns = platforms.map(p => Markup.button.callback(p.label, `pf_${p._id}`));
+  const rows = chunk(btns, 2);
+  rows.push(back);
+  return showInline(ctx, esc(texts.t('choose_platform')), Markup.inlineKeyboard(rows));
+}
+bot.action('boost', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); st(ctx.from.id).level = 'root'; await showPlatformMenu(ctx); });
+
+async function showCategoryMenu(ctx, platformKey) {
+  const cats = await Category.find({ platform: platformKey }).lean();
+  const back = [Markup.button.callback('◀️ နောက်ပြန်', 'boost')];
+  if (!cats.length) {
+    return showInline(ctx, isAdmin(ctx.from.id)
+      ? `😔 "${esc(platformKey)}" အတွက် category မထည့်ရသေးပါ။ Admin က /addid (သို့) /addbutton ဖြင့် ထည့်နိုင်ပါတယ်။`
+      : '😔 ဒီ Service အတွက် ခဏနေမှ ထည့်ပေးပါမယ်ရှင့်။', Markup.inlineKeyboard([back]));
+  }
+  const rows = labelRows(cats.map(c => Markup.button.callback(c.label, `ct_${c._id}`)), cats.map(c => c.label));
+  rows.push(back);
+  const s = st(ctx.from.id); s.level = 'root'; s.platform = platformKey;
+  return showInline(ctx, esc(texts.t('choose_category')), Markup.inlineKeyboard(rows));
+}
+bot.action(/^pf_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const platform = await Platform.findById(ctx.match[1]);
+  if (!platform) return showPlatformMenu(ctx);
+  return showCategoryMenu(ctx, platform._id);
+});
 
 async function enterCategory(ctx, category) {
   const services = await Service.find({ categoryId: category._id, active: { $ne: false } });
+  const back = [Markup.button.callback('◀️ နောက်ပြန်', `pf_${category.platform}`)];
   if (!services.length) {
-    return ctx.reply(isAdmin(ctx.from.id)
+    return showInline(ctx, isAdmin(ctx.from.id)
       ? '😔 ဒီ category အတွက် service များ မရှိသေးပါ။ /addbutton (သို့) /addid ဖြင့် ထည့်ပါ။'
-      : '😔 ခဏနေမှ ထည့်ပေးပါမယ်ရှင့်။'
-    );
+      : '😔 ခဏနေမှ ထည့်ပေးပါမယ်ရှင့်။', Markup.inlineKeyboard([back]));
   }
   if (services.length === 1) return startLinkFlow(ctx, services[0], category);
-  const rows = chunk(services.map(s => s.label), 4);
-  rows.push([BTN_BACK]);
-  const s = st(ctx.from.id);
-  s.level = 'service'; s.categoryId = String(category._id); s.platform = category.platform;
-  await ctx.reply(texts.t('choose_service'), Markup.keyboard(rows).resize());
+  const rows = labelRows(services.map(sv => Markup.button.callback(sv.label, `sv_${sv._id}`)), services.map(sv => sv.label));
+  rows.push(back);
+  const s = st(ctx.from.id); s.level = 'root'; s.categoryId = String(category._id); s.platform = category.platform;
+  return showInline(ctx, esc(texts.t('choose_service')), Markup.inlineKeyboard(rows));
 }
+bot.action(/^ct_([0-9a-fA-F]{24})$/, async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const category = await Category.findById(ctx.match[1]);
+  if (!category) return showPlatformMenu(ctx);
+  return enterCategory(ctx, category);
+});
+bot.action(/^sv_([0-9a-fA-F]{24})$/, async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  const service = await Service.findById(ctx.match[1]);
+  if (!service || service.active === false) return showPlatformMenu(ctx);
+  const category = await Category.findById(service.categoryId);
+  if (!category) return showPlatformMenu(ctx);
+  return startLinkFlow(ctx, service, category);
+});
+
+// "❌ မလုပ်တော့ပါ" under the link / quantity / confirm messages -> back to the Shop screen
+const flowCancelKb = () => Markup.inlineKeyboard([[Markup.button.callback('❌ မလုပ်တော့ပါ', 'flow_cancel')]]);
+bot.action('flow_cancel', async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  if (st(ctx.from.id).level === 'placing') return; // the order is being placed right now - too late to cancel
+  resetState(ctx.from.id);
+  await showShopHome(ctx);
+});
 
 async function startLinkFlow(ctx, service, category) {
   const s = st(ctx.from.id);
@@ -640,8 +918,23 @@ async function startLinkFlow(ctx, service, category) {
   s.serviceLabel = service.label;
   const formatted = service.manualDuration || providers.formatDuration(service.avgTime);
   const duration = formatted ? `${formatted} ဖြစ်ပါတယ်ရှင့် ❤️` : 'အနည်းငယ်ကြာနိုင်ပါတယ်ရှင့် ♥️';
-  await ctx.reply(texts.t('ask_link', { duration }));
+  await ctx.reply(texts.t('ask_link', { duration }), flowCancelKb());
 }
+
+// ---- Support: 🆘 Order အကူအညီ + admin contact (2 inline buttons) ----
+async function showSupport(ctx) {
+  const rows = [];
+  if (helpOn()) rows.push([Markup.button.callback('🆘 Order အကူအညီ', 'sup_help')]);
+  // admin contact = the link buttons the admin added (/addmenubutton or Panel > Settings),
+  // or SUPPORT_ADMIN_URL from the environment as a fallback
+  const links = (await MenuButton.find({}).sort({ createdAt: 1 }).lean()).filter(b => tgUrlOk(b.url));
+  if (links.length) for (const b of links) rows.push([Markup.button.url(String(b._id), b.url)]);
+  else if (tgUrlOk(process.env.SUPPORT_ADMIN_URL)) rows.push([Markup.button.url('☎️ Support Admin', process.env.SUPPORT_ADMIN_URL)]);
+  else rows.push([Markup.button.callback('☎️ Support Admin', 'sup_admin_missing')]);
+  await ctx.reply('🆘 <b>Support</b>\n\nဘာကူညီပေးရမလဲရှင့် 😊\nအောက်က ခလုတ်တစ်ခုခု ရွေးပါ 👇', { parse_mode: 'HTML', reply_markup: Markup.inlineKeyboard(rows).reply_markup });
+}
+bot.action('sup_help', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await openHelp(ctx); });
+bot.action('sup_admin_missing', (ctx) => ctx.answerCbQuery('Admin link မသတ်မှတ်ရသေးပါ - ခဏနေမှ ပြန်ကြိုးစားပါနော်', { show_alert: true }).catch(() => {}));
 
 // =======================================================================
 // Text handler for the whole state machine (order flow, topup flow,
@@ -652,7 +945,7 @@ const MYANMAR_DIGITS = /[၀-၉]/;
 // every reply-keyboard button the bot shows (fixed ones + admin-added ones are
 // handled by the MenuButton lookup above). Used to keep the AI from answering them.
 function isMenuButtonText(t) {
-  return [BTN_SERVICES, BTN_BALANCE, BTN_TOPUP, BTN_HISTORY, BTN_COUPON, BTN_BACK, BTN_HELP].includes(t);
+  return [BTN_SHOP, BTN_HISTORY, BTN_DEPOSIT, BTN_SUPPORT, LEGACY_SUPPORT, LEGACY_SERVICES, LEGACY_BALANCE, LEGACY_TOPUP, LEGACY_HISTORY, LEGACY_COUPON, LEGACY_BACK, LEGACY_HELP].includes(t);
 }
 
 bot.on('text', async (ctx, next) => {
@@ -670,23 +963,7 @@ bot.on('text', async (ctx, next) => {
     return ctx.reply('👇', Markup.inlineKeyboard([[Markup.button.url(text, customBtn.url)]]));
   }
 
-  // ---- platform/category/service picked from the bottom keyboard ----
-  if (s.level === 'platform') {
-    const platform = await Platform.findOne({ label: text });
-    if (!platform) return ctx.reply(`❌ "${text}" ဆိုတဲ့ home button မတွေ့ပါ။ Menu ထဲက button ကိုပဲ နှိပ်ပေးပါ။`);
-    return showCategoryMenu(ctx, platform._id);
-  }
-  if (s.level === 'category') {
-    const category = await Category.findOne({ platform: s.platform, label: text });
-    if (!category) return ctx.reply(`❌ "${text}" ဆိုတဲ့ category မတွေ့ပါ။ Menu ထဲက button ကိုပဲ နှိပ်ပေးပါ။`);
-    return enterCategory(ctx, category);
-  }
-  if (s.level === 'service') {
-    const service = await Service.findOne({ categoryId: s.categoryId, label: text, active: { $ne: false } });
-    if (!service) return ctx.reply(`❌ "${text}" ဆိုတဲ့ service မတွေ့ပါ။ Menu ထဲက button ကိုပဲ နှိပ်ပေးပါ။`);
-    const category = await Category.findById(s.categoryId);
-    return startLinkFlow(ctx, service, category);
-  }
+  // (platform / category / service are picked with INLINE buttons now - see "Shop -> Boost Service" above)
 
   // ---- order: link then quantity ----
   if (s.level === 'link') {
@@ -695,7 +972,7 @@ bot.on('text', async (ctx, next) => {
     }
     s.link = text;
     s.level = 'quantity';
-    await ctx.reply(texts.t('ask_quantity'), { parse_mode: 'Markdown' });
+    await ctx.reply(texts.t('ask_quantity'), { parse_mode: 'Markdown', reply_markup: flowCancelKb().reply_markup });
     return;
   }
   if (s.level === 'quantity') {
@@ -720,7 +997,7 @@ bot.on('text', async (ctx, next) => {
     s.level = 'confirm';
     await ctx.reply(
       texts.t('order_confirm', { cost }),
-      Markup.inlineKeyboard([[Markup.button.callback('✅ ဝယ်ယူမည်', 'place_order')]])
+      Markup.inlineKeyboard([[Markup.button.callback('✅ ဝယ်ယူမည်', 'place_order'), Markup.button.callback('❌ မလုပ်တော့ပါ', 'flow_cancel')]])
     );
     return;
   }
@@ -1305,14 +1582,16 @@ bot.action(/^cancel_order_([0-9a-fA-F]{24})$/, async (ctx) => {
 // =======================================================================
 const HELP_LABEL = { refill: '♻️ Refill (ပြန်ဖြည့်)', speed: '⚡ Speed up (မြန်ပေး)', cancel: '❌ Cancel + Refund' };
 
-bot.hears(BTN_HELP, async (ctx) => {
+// opened from Support > "🆘 Order အကူအညီ" (the old bottom-keyboard button still works too)
+bot.hears(LEGACY_HELP, (ctx) => openHelp(ctx));
+async function openHelp(ctx) {
   resetState(ctx.from.id);
   if (!helpOn()) return ctx.reply(texts.t('help_disabled'));
   st(ctx.from.id).level = 'help_id';
   const recent = await Order.find({ userId: String(ctx.from.id) }).sort({ createdAt: -1 }).limit(5);
   const rows = recent.map(o => [Markup.button.callback(`${statusIcon(o.status)} #${orderRef(o)} · ${shorten(`${o.categoryLabel || ''} ${o.serviceLabel || ''}`.trim(), 28)}`, `help_o_${o._id}`)]);
   await ctx.reply(texts.t('help_ask_id'), rows.length ? Markup.inlineKeyboard(rows) : undefined);
-});
+}
 
 async function showHelpCard(ctx, order) {
   const text =
@@ -1625,7 +1904,7 @@ bot.command('addmenubutton', async (ctx) => {
   }
   const [label, url] = parts;
   await MenuButton.findByIdAndUpdate(label, { _id: label, url }, { upsert: true });
-  await ctx.reply(`✅ Menu button "${label}" ထည့်ပြီးပါပြီ (main menu ရဲ့ အောက်ဆုံးမှာ ပေါ်ပါလိမ့်မယ်)။`);
+  await ctx.reply(`✅ Menu button "${label}" ထည့်ပြီးပါပြီ (🆘 Support ထဲမှာ ပေါ်ပါလိမ့်မယ်)။`);
 });
 
 bot.command('removemenubutton', async (ctx) => {

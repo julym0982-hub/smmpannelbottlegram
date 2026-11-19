@@ -231,10 +231,10 @@ async function autoFacts() {
   const pay = [];
   if (real(texts.t('kpay_number'))) pay.push(`KPay ${texts.t('kpay_number')} (${texts.t('kpay_name')})`);
   if (real(texts.t('wave_number'))) pay.push(`Wave ${texts.t('wave_number')} (${texts.t('wave_name')})`);
-  if (pay.length) out.push(`ငွေလွှဲလက်ခံတဲ့ account: ${pay.join('၊ ')} - ငွေဖြည့်တဲ့အခါ 💰ငွေဖြည့်ရန်💰 ခလုတ်ကနေ လုပ်ရမယ်၊ ဒီမှာ လွှဲပြီး screenshot ပို့လို့ မရဘူးလို့ ရှင်းပြပါ`);
+  if (pay.length) out.push(`ငွေလွှဲလက်ခံတဲ့ account: ${pay.join('၊ ')} - ငွေဖြည့်တဲ့အခါ "💰 Deposit" ခလုတ်ကနေ လုပ်ရမယ်၊ ဒီမှာ လွှဲပြီး screenshot ပို့လို့ မရဘူးလို့ ရှင်းပြပါ`);
   try {
     const btns = await MenuButton.find({}).lean();
-    if (btns.length) out.push(`Menu ထဲက link ခလုတ်များ (Admin/ဆက်သွယ်ရန်): ${btns.map(b => b._id).join('၊ ')} - ဆက်သွယ်ချင်ရင် ဒီခလုတ်ကို ညွှန်ပါ (link/username ကိုယ်တိုင် မစပ်ပါနဲ့)`);
+    if (btns.length) out.push(`🛟 Support ထဲက link ခလုတ်များ (Admin/ဆက်သွယ်ရန်): ${btns.map(b => b._id).join('၊ ')} - ဆက်သွယ်ချင်ရင် ဒီခလုတ်ကို ညွှန်ပါ (link/username ကိုယ်တိုင် မစပ်ပါနဲ့)`);
   } catch (_) { /* ignore */ }
   return out.join('\n');
 }

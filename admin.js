@@ -9,7 +9,8 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const axios = require('axios');
-const { Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, MenuButton, HelpRequest, Stat, ApiKey, AiUsage } = require('./models');
+const { Platform, User, Category, Service, Order, Coupon, Deposit, AdminLog, MenuButton, HelpRequest, Stat, ApiKey, AiUsage, TgAccount } = require('./models');
+const tgSession = require('./tg-session');
 const mongoose = require('mongoose');
 const retention = require('./retention');
 const ai = require('./ai');
@@ -969,6 +970,170 @@ module.exports = function mountAdminPanel(app, deps) {
   }));
 
   // ======================================================================
+  // Maintenance mode: while ON, customers only get the maintenance notice
+  // (reason + duration written here); admins keep full access.
+  // ======================================================================
+  const maintenanceState = () => {
+    const m = texts.maintenance();
+    return { on: m.on, reason: m.reason, durationValue: m.durationValue, durationUnit: m.durationUnit, template: m.template };
+  };
+  api.get('/maintenance', wrap(async (req, res) => res.json(maintenanceState())));
+
+  api.post('/maintenance', wrap(async (req, res) => {
+    if (typeof req.body.on !== 'boolean') throw fail(400, 'on မမှန်ပါ');
+    const on = req.body.on;
+    if (on) {
+      const reason = str(req.body.reason, 'အကြောင်းအရင်း', { max: 500 });
+      const value = num(req.body.durationValue, 'ကြာချိန်', { min: 1, max: 9999, int: true });
+      const unit = req.body.durationUnit;
+      if (!['minute', 'hour'].includes(unit)) throw fail(400, 'ကြာချိန် unit (မိနစ်/နာရီ) မမှန်ပါ');
+      await texts.setText('maintenance_reason', reason);
+      await texts.setText('maintenance_duration_value', String(value));
+      await texts.setText('maintenance_duration_unit', unit);
+      await texts.setText('maintenance_on', '1');
+      log(req, 'maintenance_on', `${value} ${unit} - ${reason}`);
+    } else {
+      await texts.setText('maintenance_on', '0'); // reason/duration stay saved so they can be reused next time
+      log(req, 'maintenance_off', '');
+    }
+    res.json({ ok: true, ...maintenanceState() });
+  }));
+
+  // ======================================================================
+  // Telegram Accounts for sale (phone + encrypted session). The session string
+  // is never sent back to the browser.
+  // ======================================================================
+  const tgItem = (a) => ({ id: String(a._id), hasTwoStep: !!a.twoStepEnc, phone: a.phone, note: a.note || '', status: a.status, soldTo: a.soldTo || '', soldAt: a.soldAt, price: a.price || 0, codeRequests: a.codeRequests || 0, lastCodeAt: a.lastCodeAt, createdAt: a.createdAt });
+  api.get('/tgaccounts', wrap(async (req, res) => {
+    const rows = await TgAccount.find({}).sort({ createdAt: -1 }).limit(300).lean();
+    const count = (st) => rows.filter(a => a.status === st).length;
+    res.json({
+      enabled: texts.getRaw('tgacc_enabled') !== '0', apiConfigured: tgSession.configured(),
+      stats: { available: count('available'), sold: count('sold'), disabled: count('disabled') },
+      items: rows.map(tgItem)
+    });
+  }));
+  // --- create a new session right here: phone -> code -> (2FA password) -> save as account
+  const tgErr = (e) => {
+    const m = String((e && (e.errorMessage || e.message)) || e);
+    const map = { PHONE_NUMBER_INVALID: 'ဖုန်းနံပါတ် မမှန်ပါ', PHONE_CODE_INVALID: 'Code မှားနေပါတယ်', PHONE_CODE_EXPIRED: 'Code သက်တမ်းကုန်ပါပြီ - အစက ပြန်စပါ', PASSWORD_HASH_INVALID: '2step password မှားနေပါတယ်', PHONE_NUMBER_BANNED: 'ဒီနံပါတ်ကို Telegram က ban ထားပါတယ်', PHONE_NUMBER_FLOOD: 'Code အကြိမ်များလွန်းပါတယ်၊ ခဏစောင့်ပါ' };
+    const key = Object.keys(map).find(k => m.includes(k));
+    if (key) return fail(400, map[key]);
+    if (/FLOOD_WAIT|FLOOD/.test(m)) return fail(429, 'Telegram က ခဏတားထားပါတယ် (flood wait) - နောက်မှ ပြန်စမ်းပါ');
+    return fail(502, m.slice(0, 200));
+  };
+  api.post('/tglogin/start', wrap(async (req, res) => {
+    const phone = String(req.body.phone || '').replace(/\D/g, '');
+    if (phone.length < 7 || phone.length > 15) throw fail(400, 'ဖုန်းနံပါတ် မမှန်ပါ (country code ပါအောင် - 959xxxxxxxxx)');
+    if (await TgAccount.exists({ phone })) throw fail(409, 'ဒီဖုန်းနံပါတ် ထည့်ပြီးသားပါ');
+    try { res.json({ ok: true, ...(await tgSession.tgLoginStart(phone)) }); } catch (e) { throw tgErr(e); }
+  }));
+  api.post('/tglogin/code', wrap(async (req, res) => {
+    try { res.json({ ok: true, ...(await tgSession.tgLoginCode(String(req.body.loginId || ''), req.body.code)) }); } catch (e) { throw tgErr(e); }
+  }));
+  api.post('/tglogin/password', wrap(async (req, res) => {
+    try { res.json({ ok: true, ...(await tgSession.tgLoginPassword(String(req.body.loginId || ''), String(req.body.password || ''))) }); } catch (e) { throw tgErr(e); }
+  }));
+  api.post('/tglogin/cancel', wrap(async (req, res) => { tgSession.tgLoginCancel(String(req.body.loginId || '')); res.json({ ok: true }); }));
+  api.post('/tglogin/save', wrap(async (req, res) => {
+    const price = num(req.body.price, 'ဈေး', { min: 1, max: 10000000, int: true });
+    let taken;
+    try { taken = tgSession.tgLoginTake(String(req.body.loginId || '')); } catch (e) { throw fail(400, e.message); }
+    const phone = taken.me.phone.replace(/\D/g, '');
+    if (!phone) throw fail(500, 'ဖုန်းနံပါတ် မဖတ်ရပါ');
+    if (await TgAccount.exists({ phone })) throw fail(409, 'ဒီဖုန်းနံပါတ် ထည့်ပြီးသားပါ');
+    const typed = str(req.body.twoStep, '2step password', { max: 100, required: false });
+    const twoStep = typed || taken.password || '';
+    const a = await TgAccount.create({ phone, sessionEnc: ai.encrypt(taken.session), price, twoStepEnc: twoStep ? ai.encrypt(twoStep) : undefined, tgUserId: taken.me.id, tgUsername: taken.me.username, note: str(req.body.note, 'Note', { max: 100, required: false }) });
+    log(req, 'tgaccount_add', phone + ' (new session)');
+    res.json({ ok: true, item: tgItem(a) });
+  }));
+
+  // --- check the codes an account received (newest 5 min / newest ever) and view its profile
+  api.post('/tgaccounts/:id/code', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const a = await TgAccount.findById(req.params.id);
+    if (!a) throw fail(404, 'Account မတွေ့ပါ');
+    let r;
+    try { r = await tgSession.latestLoginCode(ai.decrypt(a.sessionEnc), req.body.mode === '5min' ? 5 : Infinity); }
+    catch (e) { throw fail(502, 'စစ်မရပါ: ' + String(e.message).slice(0, 150)); }
+    res.json({ ok: true, found: !!r, code: r ? r.code : '', date: r ? r.date : null });
+  }));
+  api.post('/tgaccounts/:id/profile', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const a = await TgAccount.findById(req.params.id);
+    if (!a) throw fail(404, 'Account မတွေ့ပါ');
+    let r;
+    try { r = await tgSession.checkSession(ai.decrypt(a.sessionEnc)); }
+    catch (e) { throw fail(502, 'စစ်မရပါ: ' + String(e.message).slice(0, 150)); }
+    if (!r.ok) return res.json({ ok: false });
+    await TgAccount.updateOne({ _id: a._id }, { $set: { tgUserId: r.id, tgUsername: r.username } });
+    const link = r.username ? `https://t.me/${r.username}` : `tg://user?id=${r.id}`;
+    let pw = ''; try { pw = a.twoStepEnc ? ai.decrypt(a.twoStepEnc) : ''; } catch (_) {}
+    res.json({ ok: true, id: r.id, username: r.username, phone: r.phone, name: r.name, link, twoStep: pw, price: a.price || 0 });
+  }));
+
+  api.post('/tgaccounts', wrap(async (req, res) => {
+    const phone = String(req.body.phone || '').replace(/\D/g, '');
+    if (phone.length < 7 || phone.length > 15) throw fail(400, 'ဖုန်းနံပါတ် မမှန်ပါ (country code ပါအောင် - 959xxxxxxxxx)');
+    const session = String(req.body.session || '').replace(/\s+/g, '');
+    if (session.length < 100 || !/^[A-Za-z0-9+/=_-]+$/.test(session)) throw fail(400, 'Session string မမှန်ပါ (tools/make-session.js နဲ့ ထုတ်ထားတာ ထည့်ပါ)');
+    if (await TgAccount.exists({ phone })) throw fail(409, 'ဒီဖုန်းနံပါတ် ထည့်ပြီးသားပါ');
+    const price = num(req.body.price, 'ဈေး', { min: 1, max: 10000000, int: true });
+    const twoStep = str(req.body.twoStep, '2step password', { max: 100, required: false });
+    const a = await TgAccount.create({ phone, sessionEnc: ai.encrypt(session), price, twoStepEnc: twoStep ? ai.encrypt(twoStep) : undefined, note: str(req.body.note, 'Note', { max: 100, required: false }) });
+    // best effort: remember the account's own Telegram id/username for the buyer's Profile link
+    if (tgSession.configured()) {
+      try { const r = await tgSession.checkSession(session); if (r.ok) await TgAccount.updateOne({ _id: a._id }, { $set: { tgUserId: r.id, tgUsername: r.username } }); } catch (_) { /* can be filled later with the စစ် button */ }
+    }
+    log(req, 'tgaccount_add', phone);
+    res.json({ ok: true, item: tgItem(a) });
+  }));
+  api.post('/tgaccounts/settings', wrap(async (req, res) => {
+    if (req.body.enabled !== undefined) await texts.setText('tgacc_enabled', req.body.enabled ? '1' : '0');
+    log(req, 'tgaccount_settings', `enabled=${texts.getRaw('tgacc_enabled')}`);
+    res.json({ ok: true });
+  }));
+  api.post('/tgaccounts/:id/check', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const a = await TgAccount.findById(req.params.id);
+    if (!a) throw fail(404, 'Account မတွေ့ပါ');
+    let r;
+    try { r = await tgSession.checkSession(ai.decrypt(a.sessionEnc)); }
+    catch (e) { throw fail(502, 'စစ်မရပါ: ' + String(e.message).slice(0, 150)); }
+    if (r.ok) await TgAccount.updateOne({ _id: a._id }, { $set: { tgUserId: r.id, tgUsername: r.username } });
+    res.json({ ok: !!r.ok, phone: r.phone || '', name: r.name || '' });
+  }));
+  api.patch('/tgaccounts/:id', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const set = {}, unset = {};
+    if (req.body.status !== undefined) {
+      const status = String(req.body.status);
+      if (!['available', 'disabled'].includes(status)) throw fail(400, 'status မမှန်ပါ');
+      set.status = status;
+      if (status === 'available') { unset.soldTo = ''; unset.soldAt = ''; set.hidden = false; set.codeRequests = 0; } // price stays
+    }
+    if (req.body.price !== undefined) set.price = num(req.body.price, 'ဈေး', { min: 1, max: 10000000, int: true });
+    if (req.body.twoStep !== undefined) {
+      const t = str(req.body.twoStep, '2step password', { max: 100, required: false });
+      if (t) set.twoStepEnc = ai.encrypt(t); else unset.twoStepEnc = '';
+    }
+    if (!Object.keys(set).length && !Object.keys(unset).length) throw fail(400, 'ပြင်စရာ မပါပါ');
+    const upd = { $set: set }; if (Object.keys(unset).length) upd.$unset = unset;
+    const a = await TgAccount.findByIdAndUpdate(req.params.id, upd, { new: true });
+    if (!a) throw fail(404, 'Account မတွေ့ပါ');
+    log(req, 'tgaccount_update', `${a.phone} ${Object.keys(set).concat(Object.keys(unset)).join(',')}`);
+    res.json({ ok: true, item: tgItem(a) });
+  }));
+  api.delete('/tgaccounts/:id', wrap(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) throw fail(404, 'မတွေ့ပါ');
+    const a = await TgAccount.findByIdAndDelete(req.params.id);
+    if (!a) throw fail(404, 'Account မတွေ့ပါ');
+    log(req, 'tgaccount_delete', a.phone);
+    res.json({ ok: true });
+  }));
+
+  // ======================================================================
   // Settings: pricing, payment numbers, bot messages, menu buttons
   // ======================================================================
   api.get('/settings', wrap(async (req, res) => {
@@ -1022,36 +1187,6 @@ module.exports = function mountAdminPanel(app, deps) {
     await texts.resetText(key);
     log(req, 'settings_reset', key);
     res.json({ ok: true, value: texts.getRaw(key) });
-  }));
-
-  // ======================================================================
-  // Maintenance mode: while ON, customers only get the maintenance notice
-  // (reason + duration written here); admins keep full access.
-  // ======================================================================
-  const maintenanceState = () => {
-    const m = texts.maintenance();
-    return { on: m.on, reason: m.reason, durationValue: m.durationValue, durationUnit: m.durationUnit, template: m.template };
-  };
-  api.get('/maintenance', wrap(async (req, res) => res.json(maintenanceState())));
-
-  api.post('/maintenance', wrap(async (req, res) => {
-    if (typeof req.body.on !== 'boolean') throw fail(400, 'on မမှန်ပါ');
-    const on = req.body.on;
-    if (on) {
-      const reason = str(req.body.reason, 'အကြောင်းအရင်း', { max: 500 });
-      const value = num(req.body.durationValue, 'ကြာချိန်', { min: 1, max: 9999, int: true });
-      const unit = req.body.durationUnit;
-      if (!['minute', 'hour'].includes(unit)) throw fail(400, 'ကြာချိန် unit (မိနစ်/နာရီ) မမှန်ပါ');
-      await texts.setText('maintenance_reason', reason);
-      await texts.setText('maintenance_duration_value', String(value));
-      await texts.setText('maintenance_duration_unit', unit);
-      await texts.setText('maintenance_on', '1');
-      log(req, 'maintenance_on', `${value} ${unit} - ${reason}`);
-    } else {
-      await texts.setText('maintenance_on', '0'); // reason/duration stay saved so they can be reused next time
-      log(req, 'maintenance_off', '');
-    }
-    res.json({ ok: true, ...maintenanceState() });
   }));
 
   api.post('/menu-buttons', wrap(async (req, res) => {

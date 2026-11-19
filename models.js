@@ -183,7 +183,29 @@ const AiUsageSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+// Telegram accounts for sale. The admin adds the phone number + a session
+// string (stored AES-256-GCM encrypted, never sent to the browser). When a
+// customer buys one, the bot shows the phone number and - on "Get Code" -
+// reads the latest login code Telegram sent to that account.
+const TgAccountSchema = new mongoose.Schema({
+  phone: { type: String, required: true, unique: true }, // digits only, with country code, e.g. 959123456789
+  sessionEnc: { type: String, required: true },
+  twoStepEnc: String, // optional 2-step (cloud) password, encrypted - shown to the buyer
+  tgUserId: String, // the account's own Telegram id / username (read from the session) - used for the Profile link
+  tgUsername: String,
+  hidden: { type: Boolean, default: false }, // buyer removed it from their History (the account itself is untouched)
+  note: String,
+  status: { type: String, enum: ['available', 'sold', 'disabled'], default: 'available', index: true },
+  soldTo: { type: String, index: true },
+  soldAt: Date,
+  price: Number, // MMK price of THIS account (set by admin when adding it; also what the buyer paid)
+  codeRequests: { type: Number, default: 0 },
+  lastCodeAt: Date,
+  createdAt: { type: Date, default: Date.now }
+});
+
 module.exports = {
+  TgAccount: mongoose.model('TgAccount', TgAccountSchema),
   ApiKey: mongoose.model('ApiKey', ApiKeySchema),
   AiUsage: mongoose.model('AiUsage', AiUsageSchema),
   HelpRequest: mongoose.model('HelpRequest', HelpRequestSchema),

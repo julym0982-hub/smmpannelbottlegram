@@ -1018,7 +1018,7 @@
       const f = s.features;
       const sw = (checked, onchange) => h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked, onchange }), h('i'));
       const helpSw = sw(f.help_enabled !== '0', async () => { try { await save({ help_enabled: helpSw.firstChild.checked ? '1' : '0' }); toast(helpSw.firstChild.checked ? 'Help Order ဖွင့်ပြီး (user တွေ မြင်ရမည်)' : 'Help Order ပိတ်ပြီး (user တွေ မမြင်ရတော့)', 'ok'); } catch (e) { helpSw.firstChild.checked = !helpSw.firstChild.checked; fail(e); } });
-      body.appendChild(h('div', { class: 'card' }, h('div', { class: 'row nowrap' }, h('div', { class: 'grow' }, h('h2', { style: 'margin:0' }, '🆘 Order အကူအညီ (Help Order)'), h('div', { class: 'muted small' }, 'ပိတ်ထားရင် user တွေရဲ့ main menu ထဲမှာ ခလုတ် မပေါ်ပါ၊ ဖွင့်ရင် ပေါ်ပါမယ်')), helpSw)));
+      body.appendChild(h('div', { class: 'card' }, h('div', { class: 'row nowrap' }, h('div', { class: 'grow' }, h('h2', { style: 'margin:0' }, '🆘 Order အကူအညီ (Help Order)'), h('div', { class: 'muted small' }, 'ပိတ်ထားရင် user တွေရဲ့ 🛟 Support ထဲမှာ ခလုတ် မပေါ်ပါ၊ ဖွင့်ရင် ပေါ်ပါမယ်')), helpSw)));
 
       const autoSw = sw(f.history_auto !== '0', () => {});
       const days = h('input', { type: 'number', value: f.history_keep_days, min: 1, max: 365, inputmode: 'numeric' });
@@ -1063,7 +1063,7 @@
     function tabMenu() {
       const label = h('input', { type: 'text', placeholder: '☎️ Contact Admin', maxlength: 40 });
       const url = h('input', { type: 'url', placeholder: 'https://t.me/YourUsername' });
-      body.appendChild(h('div', { class: 'card' }, h('h2', {}, 'Main menu button အသစ်'), h('div', { class: 'stack' }, field('Button စာသား', label), field('Link (user နှိပ်ရင် ဖွင့်မည့် link)', url),
+      body.appendChild(h('div', { class: 'card' }, h('h2', {}, 'Support ထဲက Admin button အသစ်'), h('div', { class: 'stack' }, field('Button စာသား', label), field('Link (user နှိပ်ရင် ဖွင့်မည့် link)', url),
         h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => { await POST('/menu-buttons', { label: label.value, url: url.value }); toast('ထည့်ပြီး', 'ok'); s = await GET('/settings'); draw(); }) }, 'ထည့်မည်'))));
       body.appendChild(h('div', { class: 'card' }, h('h2', {}, 'ရှိပြီးသား'), s.menuButtons.length ? h('div', { class: 'list' }, s.menuButtons.map(b =>
         h('div', { class: 'item row nowrap' }, h('div', { class: 'grow' }, h('strong', {}, b.label), h('div', { class: 'muted small trunc' }, b.url)),
