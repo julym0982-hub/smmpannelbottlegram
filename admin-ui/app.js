@@ -200,12 +200,13 @@
     { id: 'ai', label: 'AI Bot', icon: 'bot' },
     { id: 'help', label: 'Help Orders', icon: 'help' },
     { id: 'accounts', label: 'TG Accounts', icon: 'users' },
+    { id: 'ml', label: 'ML TopUp', icon: 'cart' },
     { id: 'coupons', label: 'Coupon', icon: 'gift' },
     { id: 'broadcast', label: 'စာပို့ရန်', icon: 'mega' },
     { id: 'settings', label: 'Settings', icon: 'gear' },
     { id: 'logs', label: 'Activity Log', icon: 'log' }
   ];
-  const PAGES = { dashboard: pageDashboard, deposits: pageDeposits, orders: pageOrders, users: pageUsers, services: pageServices, help: pageHelp, ai: pageAI, accounts: pageAccounts, coupons: pageCoupons, broadcast: pageBroadcast, settings: pageSettings, logs: pageLogs };
+  const PAGES = { dashboard: pageDashboard, deposits: pageDeposits, orders: pageOrders, users: pageUsers, services: pageServices, help: pageHelp, ai: pageAI, accounts: pageAccounts, ml: pageMl, coupons: pageCoupons, broadcast: pageBroadcast, settings: pageSettings, logs: pageLogs };
 
   function routeId() { const r = (location.hash || '#dashboard').slice(1).split('?')[0]; return PAGES[r] ? r : 'dashboard'; }
   function clearTimers() { state.timers.forEach(clearInterval); state.timers = []; }
@@ -985,6 +986,122 @@
     chatBox.append(h('h2', {}, '🗂 Customer နဲ့ AI ပြောထားတာများ'), h('div', { class: 'muted small chat-note', style: 'margin-bottom:8px' }), h('div', { class: 'stack' }, qBox, sortSel, chatList));
     view.append(h('div', { style: 'height:12px' }), h('div', { class: 'card' }, chatBox));
     loadChats();
+  }
+
+  // ==================================================================
+  // PAGE: ML TopUp (Mobile Legends diamonds, bought on Smile One)
+  // ==================================================================
+  function pageMl(view) {
+    const root = h('div', { class: 'stack' });
+    view.append(h('div', { style: 'height:12px' }), root);
+    const OSTATUS = { done: '🟢 ပြီး', processing: '⏳ လုပ်နေ', check: '🟠 စစ်ရန်', failed: '🔴 မအောင်', refunded: '↩️ ငွေပြန်ထည့်ပြီး', dryrun: '🧪 စမ်းသပ်' };
+    const sw = (label, checked, onchange, hint) => h('div', { class: 'row nowrap', style: 'padding:6px 0' },
+      h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked, onchange }), h('i')),
+      h('div', { class: 'grow' }, label, hint ? h('div', { class: 'muted small' }, hint) : null));
+    const field = (label, input, hint) => h('label', { class: 'stack' }, h('span', { class: 'small' }, label), input, hint ? h('span', { class: 'muted small' }, hint) : null);
+    const roundTo = (x, step) => Math.round(x / step) * step;
+
+    async function load() {
+      let r; try { r = await GET('/ml'); } catch (e) { return fail(e); }
+      const c = r.cfg;
+      const saveCfg = (b, msg) => busy(null, async () => { await POST('/ml/settings', b); toast(msg || 'သိမ်းပြီး ✅', 'ok'); load(); });
+
+      // ---- 1) who sees it / real buying
+      const liveCb = h('input', { type: 'checkbox', checked: c.live, onchange: async (e) => {
+        if (e.target.checked && !(await confirmBox('တကယ်ဝယ်မည်', 'ဖွင့်လိုက်ရင် ဝယ်သူတွေ "ဟုတ်ပါတယ်" နှိပ်တိုင်း သူတို့ရဲ့ ကျပ်လက်ကျန်ကို နှုတ်ပြီး Smile One ကနေ Smile Coins နဲ့ တကယ်ဝယ်ပါမယ်။ Session စစ်ပြီး၊ ဈေးမှန်ပြီးမှ ဖွင့်ပါ။', 'ဖွင့်မည်', true))) { e.target.checked = false; return; }
+        saveCfg({ live: e.target.checked }, e.target.checked ? 'တကယ်ဝယ်မုဒ် ဖွင့်ပြီး' : 'စမ်းသပ်မုဒ်သို့ ပြန်ပြောင်းပြီး');
+      } });
+      const cardVis = h('div', { class: 'card' }, h('h2', {}, '💎 Mobile Legends TopUp'),
+        sw('Bot ရဲ့ Shop မှာ button ပေါ်မည်', c.enabled, (e) => saveCfg({ enabled: e.target.checked }), 'ပိတ်ထားရင် button လုံးဝ ပျောက်ပါမယ်'),
+        sw('Admin only (customer မမြင်ရ)', c.adminOnly, (e) => saveCfg({ adminOnly: e.target.checked }), 'ဖွင့်ထားရင် Admin ကိုယ်တိုင်ပဲ မြင်ရပါမယ်'),
+        h('div', { class: 'row nowrap', style: 'padding:6px 0' }, h('label', { class: 'switch' }, liveCb, h('i')),
+          h('div', { class: 'grow' }, 'တကယ်ဝယ်မည် (Smile One မှာ)', h('div', { class: 'muted small' }, c.live ? '⚠️ ဖွင့်ထား - ငွေနှုတ်ပြီး တကယ်ဝယ်နေပါတယ်' : '🧪 ပိတ်ထား - စမ်းသပ်ရုံ (ငွေမနှုတ်၊ ဘာမှမဝယ်)'))),
+        h('div', { class: 'muted small' }, `ဒီနေ့ order ${r.today} / ${c.maxPerDay}`));
+
+      // ---- 2) Smile One session
+      const sess = r.session;
+      const out = h('div', { class: 'muted small' }, sess.has ? `Session ရှိ (cookie ${sess.count} ခု${sess.savedAt ? ' · ' + dt(sess.savedAt) : ''})` : '⚠️ Session မရှိသေးပါ');
+      const paste = h('textarea', { placeholder: 'smileone_session.json ထဲက စာအကုန် paste လုပ်ပါ', rows: 4 });
+      const file = h('input', { type: 'file', accept: '.json,application/json' });
+      const send = (json) => busy(null, async () => {
+        const x = await POST('/ml/session', { json });
+        toast(`သိမ်းပြီး ✅ (smile.one cookie ${x.count} ခု${x.dropped ? ', တခြား ' + x.dropped + ' ခု ဖယ်ထား' : ''})`, 'ok'); paste.value = ''; file.value = ''; load();
+      });
+      file.addEventListener('change', async () => { if (file.files[0]) send(await file.files[0].text()); });
+      const cardSess = h('div', { class: 'card' }, h('h2', {}, 'Smile One session'), h('div', { class: 'stack' }, out,
+        h('div', { class: 'muted small' }, 'Laptop မှာ tools/save_session_smile.py ကို run ပြီး ထွက်တဲ့ smileone_session.json ကို (က) ဒီမှာ ဖိုင်ရွေးပါ၊ (ခ) paste လုပ်ပါ၊ ဒါမှမဟုတ် (ဂ) Bot chat ထဲ ဖိုင်အနေနဲ့ ပို့ပါ (Admin ဆီကပဲ လက်ခံ၊ chat ထဲက ဖိုင်ကို ဖျက်ပေးမယ်)။ smile.one မဟုတ်တဲ့ cookie တွေကို အလိုအလျောက် ဖယ်ပါတယ်။'),
+        file, paste,
+        h('div', { class: 'row' },
+          h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => { if (!paste.value.trim()) return toast('paste လုပ်ပါ', 'err'); await send(paste.value); }) }, 'သိမ်းမည်'),
+          h('button', { class: 'btn', onclick: (e) => busy(e.target, async () => {
+            out.textContent = '⏳ စစ်နေပါတယ်…';
+            const t = await POST('/ml/test');
+            out.textContent = t.ok ? `✅ Login ရှိ · Smile Coins လက်ကျန် ${t.balance}` : `❌ ${t.code}: ${t.message}`;
+            if (t.ok) load();
+          }) }, 'Session စစ်'),
+          sess.has ? h('button', { class: 'btn danger', onclick: async (e) => { if (await confirmBox('Session ဖျက်မည်', 'သိမ်းထားတဲ့ Smile One session ကို ဖျက်မလား?', 'ဖျက်မည်', true)) busy(e.target, async () => { await DEL('/ml/session'); load(); }); } }, '🗑') : null),
+        r.pricesLive ? h('div', { class: 'muted small' }, 'ဈေးစာရင်းကို Smile One ကနေ နောက်ဆုံးယူချိန် ' + dt(r.pricesLive)) : h('div', { class: 'muted small' }, 'ဈေးစာရင်းက လက်ရှိ ပုံသေတန်ဖိုး (Session စစ်ရင် Smile One ကနေ အသစ်ယူမယ်)')));
+
+      // ---- 3) cost per Smile Coin
+      const f = {
+        mmkPaid: h('input', { type: 'number', value: c.mmkPaid, inputmode: 'decimal' }),
+        coinsCredited: h('input', { type: 'number', value: c.coinsCredited, inputmode: 'decimal' }),
+        extraFeePct: h('input', { type: 'number', value: c.extraFeePct, step: '0.1', inputmode: 'decimal' }),
+        roundTo: h('input', { type: 'number', value: c.roundTo, inputmode: 'numeric' }),
+        maxCoinsPerOrder: h('input', { type: 'number', value: c.maxCoinsPerOrder, inputmode: 'numeric' }),
+        maxPerDay: h('input', { type: 'number', value: c.maxPerDay, inputmode: 'numeric' })
+      };
+      const per = h('div', { class: 'mono', style: 'font-size:1.2em' });
+      const drawPer = () => { const m = Number(f.mmkPaid.value), k = Number(f.coinsCredited.value), x = Number(f.extraFeePct.value) || 0; per.textContent = m > 0 && k > 0 ? `1 Smile Coin = ${(m / k * (1 + x / 100)).toFixed(2)} ကျပ်` : '-'; };
+      ['mmkPaid', 'coinsCredited', 'extraFeePct'].forEach(k => f[k].addEventListener('input', drawPer)); drawPer();
+      const cardCost = h('div', { class: 'card' }, h('h2', {}, 'Smile Coin တစ်ခုရဲ့ ကုန်ကျစရိတ်'), h('div', { class: 'stack' },
+        h('div', { class: 'muted small' }, 'ကုန်ကျစရိတ် = Smile Coins ပမာဏ × (1 Coin = ဘယ်လောက်ကျပ်)။ 1 Coin ကို "ကျပ်ဘယ်လောက် စုစုပေါင်းပေးခဲ့လဲ ÷ Smile Coins ဘယ်လောက် တကယ်ရခဲ့လဲ" နဲ့ တွက်ပါ။ အဲဒီ ကျပ်ထဲမှာ USDT ဝယ်ဈေး (P2P အပိုကြေး အပါအဝင်)၊ ငွေလွှဲခ၊ Smile One ကို ဖြည့်တဲ့ ကုန်ကျစရိတ် အကုန်ပါရပါမယ်။ Coins ကတော့ Smile One လက်ကျန်ထဲ တကယ်ဝင်လာတဲ့ ပမာဏ (/customer/order ရဲ့ Saldo ပြောင်းလဲမှု) ပါ။'),
+        field('စုစုပေါင်း ပေးခဲ့တဲ့ ကျပ်', f.mmkPaid, 'ဥပမာ 30 BRL ဖြည့်ဖို့ ၂၅,၄၁၇ ကျပ်'),
+        field('အဲဒီအတွက် တကယ်ရခဲ့တဲ့ Smile Coins', f.coinsCredited, 'ဥပမာ 300 (R$30 = 300 Coins)'),
+        field('အပို safety % (လိုရင်)', f.extraFeePct, 'USDT ဈေးပြောင်း / နောက်ဖြည့်ရင် ဈေးတက်မှာ စိုးရင် ၁-၃% ထည့်ပါ၊ မလိုရင် 0'),
+        per,
+        field('ဈေးကို ဝိုင်းမယ့် ကိန်း (ကျပ်)', f.roundTo, '100 = အနီးဆုံး ၁၀၀ ကို ဝိုင်း'),
+        field('Order တစ်ခုမှာ Smile Coins အများဆုံး', f.maxCoinsPerOrder),
+        field('တစ်နေ့ order အများဆုံး', f.maxPerDay),
+        h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => { await POST('/ml/settings', Object.fromEntries(Object.keys(f).map(k => [k, f[k].value]))); toast('သိမ်းပြီး ✅ ဈေးအားလုံး ပြန်တွက်ပြီး', 'ok'); load(); }) }, 'သိမ်းမည်')));
+
+      // ---- 4) package prices
+      const delta = h('input', { type: 'number', step: '0.1', placeholder: 'ဥပမာ 1 သို့ -0.5', inputmode: 'decimal' });
+      const step = Math.max(1, Number(c.roundTo) || 1);
+      const rows = r.pkgs.map(p => {
+        const mk = h('input', { type: 'number', step: '0.1', value: p.markup, style: 'width:90px', inputmode: 'decimal' });
+        const prev = h('div', { class: 'muted small' });
+        const calc = () => { const m = Number(mk.value) || 0; const np = Math.max(step, roundTo(p.cost * (1 + m / 100), step)); prev.textContent = `ဈေး ${fmt(p.price)} → ${fmt(np)} ကျပ် (အမြတ် ${fmt(Math.round(np - p.cost))})`; };
+        mk.addEventListener('input', calc); calc();
+        const en = h('input', { type: 'checkbox', checked: p.enabled, onchange: (e) => busy(null, async () => { await POST('/ml/pkg/' + p.key, { enabled: e.target.checked }); toast(e.target.checked ? 'ဖွင့်ပြီး' : 'ပိတ်ပြီး (user မမြင်ရ)', 'ok'); }) });
+        return h('div', { class: 'item' },
+          h('div', { class: 'row nowrap' },
+            h('div', { class: 'grow' }, h('strong', {}, p.label), p.qty > 1 ? h('span', { class: 'pill acc', style: 'margin-left:6px' }, `${p.qty} ကြိမ်ဝယ် (ID ${p.pid})`) : h('span', { class: 'muted small', style: 'margin-left:6px' }, 'ID ' + p.pid),
+              h('div', { class: 'muted small' }, `Smile Coins ${p.coins} · ကုန်ကျ ${fmt(p.cost)} ကျပ် · ရောင်းဈေး `, h('strong', {}, fmt(p.price)), ` ကျပ် · အမြတ် ${fmt(p.profit)}`)),
+            h('label', { class: 'switch', title: 'ဖွင့်/ပိတ်' }, en, h('i'))),
+          h('div', { class: 'row', style: 'margin-top:6px' }, mk, h('span', {}, '%'),
+            h('button', { class: 'btn sm primary', onclick: (e) => busy(e.target, async () => { await POST('/ml/pkg/' + p.key, { markup: mk.value }); toast('သိမ်းပြီး ✅', 'ok'); load(); }) }, 'သိမ်းမည်'), prev));
+      });
+      const cardPk = h('div', { class: 'card' }, h('h2', {}, 'Package ဈေးနှုန်း'),
+        h('div', { class: 'muted small', style: 'margin-bottom:8px' }, 'ရာခိုင်နှုန်းက ကုန်ကျစရိတ်ပေါ်ကို ထပ်တင်တဲ့ အမြတ်ပါ။ ပြင်ရင် ဈေးဘယ်လောက်ဖြစ်သွားမလဲ ချက်ချင်း ဘေးမှာ ပြပါမယ်။ "သိမ်းမည်" နှိပ်မှ Bot မှာ ပြောင်းပါမယ်။'),
+        h('div', { class: 'row', style: 'margin-bottom:8px' }, h('span', {}, 'အားလုံးကို'), delta, h('span', {}, '% တိုး/လျှော့'),
+          h('button', { class: 'btn', onclick: async (e) => { const d = Number(delta.value); if (!Number.isFinite(d) || !delta.value) return toast('ဂဏန်း ထည့်ပါ', 'err'); if (await confirmBox('အားလုံးပြောင်းမည်', `Package အားလုံးရဲ့ % ကို ${d > 0 ? '+' : ''}${d} ပြောင်းမလား?`, 'ပြောင်းမည်')) busy(e.target, async () => { await POST('/ml/bulk', { delta: d }); delta.value = ''; toast('ပြောင်းပြီး ✅', 'ok'); load(); }); } }, 'ပြောင်းမည်')),
+        h('div', { class: 'list' }, rows));
+
+      // ---- 5) recent orders
+      const cardOr = h('div', { class: 'card' }, h('h2', {}, 'နောက်ဆုံး order များ'),
+        r.orders.length ? h('div', { class: 'list' }, r.orders.map(o => h('div', { class: 'item' },
+          h('div', { class: 'row nowrap' },
+            h('div', { class: 'grow' }, h('strong', {}, o.label), ' ', h('span', { class: 'pill' }, OSTATUS[o.status] || o.status),
+              h('div', { class: 'muted small' }, `${o.gameName || '-'} · ${o.gameId}/${o.zoneId} · user ${o.userId} · ${mmk(o.price)} · Coins ${o.chargedCoins != null ? o.chargedCoins : '?'}/${o.costCoins} · ${dt(o.createdAt)}`),
+              o.note ? h('div', { class: 'muted small' }, o.note) : null),
+            ['check', 'processing'].includes(o.status) ? [
+              h('button', { class: 'btn sm', onclick: async (e) => { if (await confirmBox('ပြီးပြီ', 'Smile One /customer/order မှာ ဝင်သွားတာ သေချာပါသလား? ဝယ်သူကို အောင်မြင်ကြောင်း ပို့မယ်။', 'ပြီးပြီ')) busy(e.target, async () => { await POST('/ml/orders/' + o.id + '/done'); load(); }); } }, 'ပြီးပြီ'),
+              h('button', { class: 'btn sm danger', onclick: async (e) => { if (await confirmBox('ငွေပြန်ထည့်', mmk(o.price) + ' ကို user ' + o.userId + ' ဆီ ပြန်ထည့်မလား? (Smile One မှာ မဝင်ကြောင်း အရင်စစ်ပါ)', 'ပြန်ထည့်မည်', true)) busy(e.target, async () => { await POST('/ml/orders/' + o.id + '/refund'); load(); }); } }, 'ငွေပြန်ထည့်')] : null)))) : empty('Order မရှိသေးပါ'));
+
+      root.replaceChildren(cardVis, cardSess, cardCost, cardPk, cardOr);
+    }
+    load();
   }
 
   // ==================================================================
