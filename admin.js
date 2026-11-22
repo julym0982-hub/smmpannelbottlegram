@@ -18,6 +18,7 @@ const ai = require('./ai');
 const chatlog = require('./chatlog');
 const providers = require('./providers');
 const texts = require('./texts');
+const ml = require('./ml');
 
 const COOKIE = 'smm_admin';
 
@@ -1164,6 +1165,43 @@ module.exports = function mountAdminPanel(app, deps) {
   // ======================================================================
   // Settings: pricing, payment numbers, bot messages, menu buttons
   // ======================================================================
+  // ======================================================================
+  // Mobile Legends TopUp (bot -> Smile One): visibility, prices, session, orders
+  // ======================================================================
+  api.get('/ml', wrap(async (req, res) => res.json(await ml.adminState())));
+  api.post('/ml/settings', wrap(async (req, res) => {
+    await ml.adminSettings(req.body || {});
+    log(req, 'ml_settings', JSON.stringify(req.body || {}).slice(0, 300));
+    res.json({ ok: true });
+  }));
+  api.post('/ml/pkg/:key', wrap(async (req, res) => {
+    await ml.adminPkg(String(req.params.key), req.body || {});
+    log(req, 'ml_pkg', `${req.params.key} ${JSON.stringify(req.body || {})}`);
+    res.json({ ok: true });
+  }));
+  api.post('/ml/bulk', wrap(async (req, res) => {
+    await ml.adminBulk(req.body && req.body.delta);
+    log(req, 'ml_bulk', String(req.body && req.body.delta));
+    res.json({ ok: true });
+  }));
+  api.post('/ml/session', wrap(async (req, res) => {
+    let r;
+    try { r = await ml.smile.setSessionFromJson(req.body && req.body.json); }
+    catch (e) { throw fail(400, e.message); }
+    log(req, 'ml_session', `saved ${r.count} cookies`);
+    res.json({ ok: true, count: r.count, dropped: r.dropped });
+  }));
+  api.delete('/ml/session', wrap(async (req, res) => { await ml.smile.clearSession(); log(req, 'ml_session', 'cleared'); res.json({ ok: true }); }));
+  api.post('/ml/test', wrap(async (req, res) => {
+    try { const r = await ml.smile.test(); res.json({ ok: true, balance: r.balance }); }
+    catch (e) { res.json({ ok: false, code: e.code || 'ERROR', message: String(e.message || e).slice(0, 200) }); }
+  }));
+  api.post('/ml/orders/:id/:action', wrap(async (req, res) => {
+    await ml.adminOrderAction(req.params.id, req.params.action, safeSend);
+    log(req, 'ml_order_' + req.params.action, req.params.id);
+    res.json({ ok: true });
+  }));
+
   api.get('/settings', wrap(async (req, res) => {
     const pricing = {};
     for (const p of Object.keys(providers.CONFIG)) {

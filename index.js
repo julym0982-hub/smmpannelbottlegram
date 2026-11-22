@@ -8,6 +8,7 @@ const store = require('./store');
 const providers = require('./providers');
 const texts = require('./texts');
 const mountAdminPanel = require('./admin');
+const ml = require('./ml');
 const retention = require('./retention');
 const ai = require('./ai');
 const aiTools = require('./ai-tools').create({ priceFor: (user, service, qty) => priceFor(user, service, qty) });
@@ -612,12 +613,18 @@ async function showShopHome(ctx) {
     `💰 Balance : <b>${nf(u && u.balance)}</b> ကျပ်\n\n` +
     `👇 ဝယ်ယူလိုသည့် ဝန်ဆောင်မှု ရွေးပါရှင့်`;
   const tgLabel = await tgShopLabel();
-  const kb = Markup.inlineKeyboard([
+  const rows = [
     [Markup.button.callback(tgLabel, 'tg_account')],
     [Markup.button.callback('🚀 Boost Service', 'boost')]
-  ]);
+  ];
+  // Mobile Legends TopUp: hidden when switched off, or from customers while "Admin only" is on (Panel > ML TopUp)
+  if (ml.visibleTo(isAdmin(ctx.from.id))) rows.push([Markup.button.callback('💎 Mobile Legends TopUp', 'ml_home')]);
+  const kb = Markup.inlineKeyboard(rows);
   return showInline(ctx, text, kb);
 }
+// ---- Mobile Legends TopUp (see ml.js) ----
+const mlFlow = ml.register(bot, { st, resetState, isAdmin, showInline, displayName, safeSend, adminIds: ADMIN_IDS });
+
 bot.action('shop_home', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); st(ctx.from.id).level = 'root'; await showShopHome(ctx); });
 
 // ---- Telegram Account shop -------------------------------------------------
@@ -985,6 +992,9 @@ bot.on('text', async (ctx, next) => {
   if (customBtn) {
     return ctx.reply('👇', Markup.inlineKeyboard([[Markup.button.url(text, customBtn.url)]]));
   }
+
+  // Mobile Legends TopUp: Game ID -> Server ID steps
+  if (typeof s.level === 'string' && s.level.startsWith('ml_') && await mlFlow.onText(ctx, s, text)) return;
 
   // (platform / category / service are picked with INLINE buttons now - see "Shop -> Boost Service" above)
 

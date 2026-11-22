@@ -48,3 +48,13 @@ This version = the redesigned bot (Shop / History / Deposit / Support inline men
 * Panel > Deposits: 🗑 on every approved/rejected record, and a bulk clean-up box (status + older-than-N-days, with preview). Pending requests cannot be deleted and balances are never changed.
 * Speed: Shop button price cached 10 s, new indexes (TG accounts; Orders by user/date and status/date).
 * Profile link opens the account's **profile page** (`t.me/<username>?profile`). An account with no username falls back to `tg://user?id=…`, which only opens if your Telegram already knows that user.
+
+## 💎 Mobile Legends TopUp (Shop -> Mobile Legends TopUp, paid from the customer's MMK balance, bought on Smile One with Smile Coins)
+Files: `ml.js` (menu, flow, prices, admin helpers), `ml-smile.js` (Smile One client), Panel page **ML TopUp**, model `MlOrder` (store database).
+
+* **Customer flow:** package -> Game ID -> Server ID -> bot shows the player name -> **ဟုတ်ပါတယ်** buys / **မဟုတ်ပါ** cancels.
+* **Visibility (Panel > ML TopUp):** *button ပေါ်မည်* off = button gone for everybody; *Admin only* on = only admins see it (default **on**).
+* **တကယ်ဝယ်မည်** is OFF by default = dry run: the whole flow works, nothing is charged, nothing is bought. Turn it on only after *Session စစ်* works and the prices look right.
+* **Prices:** cost = Smile Coins x (MMK paid / Smile Coins received); price = cost x (1 + markup %), rounded to the "round to" step. Edit each package's % (a live preview shows the new price and profit), or move all of them at once with the +/- % box. Smile Coins per package are read from Smile One when the session is checked (otherwise the last measured values are used). Only packages whose Smile One zone type is not 1/2 are sold (type 3 = the rule that was tested); other zones are refused instead of guessing the price.
+* **Smile One session:** run `python tools/save_session_smile.py` on your laptop -> upload `smileone_session.json` in the panel, paste it, or send the file to the bot as an admin (the bot saves it encrypted and deletes your message). Only smile.one cookies are kept; Google cookies are dropped. Then press *Session စစ်*.
+* **Safety:** one Smile One call at a time; the price shown to the customer is what they pay; if Smile One's price rose more than 3% the order is refused; a failed order refunds at once; an unclear result (timeout / no success page) is NOT refunded or retried - it shows as 🟠 စစ်ရန် in the panel for you to check on Smile One's /customer/order and press *ပြီးပြီ* or *ငွေပြန်ထည့်*. "💎1,130" is bought as 2 x the 565 tier.

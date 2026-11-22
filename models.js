@@ -210,7 +210,24 @@ TgAccountSchema.index({ status: 1, createdAt: 1 });                // next accou
 TgAccountSchema.index({ soldTo: 1, status: 1, hidden: 1, soldAt: -1 }); // a buyer's history list
 TgAccountSchema.index({ status: 1, soldAt: 1 });                    // old sold-account clean-up
 
+// Mobile Legends TopUp orders (bot -> Smile One). Lives in the store database like TgAccount.
+const MlOrderSchema = new mongoose.Schema({
+  userId: { type: String, index: true },
+  pkgKey: String, label: String,
+  smilePid: String, qty: { type: Number, default: 1 },
+  gameId: String, zoneId: String, gameName: String,
+  price: Number,        // MMK taken from the customer
+  costCoins: Number,    // Smile Coins this order was priced on
+  chargedCoins: Number, // Smile Coins really spent (from the Smile One balance difference)
+  delivered: { type: Number, default: 0 },
+  status: { type: String, enum: ['processing', 'done', 'failed', 'check', 'refunded', 'dryrun'], default: 'processing', index: true },
+  note: String,
+  createdAt: { type: Date, default: Date.now, index: true }
+});
+MlOrderSchema.index({ status: 1, createdAt: -1 });
+
 module.exports = {
+  MlOrder: store.db.model('MlOrder', MlOrderSchema),
   TgAccount: store.db.model('TgAccount', TgAccountSchema),
   ApiKey: mongoose.model('ApiKey', ApiKeySchema),
   AiUsage: mongoose.model('AiUsage', AiUsageSchema),
