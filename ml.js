@@ -152,7 +152,7 @@ function register(bot, d) {
     if (!v || !v.enabled) return showHome(ctx);
     const s = st(ctx.from.id);
     s.level = 'ml_uid'; s.ml = { key: v.key };
-    return showInline(ctx, `${esc(v.label)} — <b>${nf(v.price)}</b> ကျပ်\n\nMobile Legends <b>Game ID</b> ပို့ပေးပါ 🎮\n\n<i>Server ID ပါ တစ်ခါတည်း ပို့လို့ရပါတယ်၊ ဥပမာ</i>  <code>824412642(12267)</code>`, homeKb());
+    return showInline(ctx, `${esc(v.label)} — <b>${nf(v.price)}</b> ကျပ်\n\nMobile Legends <b>Game ID</b> ပို့ပေးပါ 🎮`, homeKb());
   });
 
   // Game ID + Server ID checked -> show the player name and ask to confirm
@@ -166,7 +166,7 @@ function register(bot, d) {
     catch (e) {
       if (e && e.code === 'ROLE') {
         s.level = 'ml_uid'; s.ml.uid = undefined; s.ml.zone = undefined;
-        await ctx.telegram.editMessageText(ctx.chat.id, wait.message_id, undefined, '❌ Game ID / Server ID မှားနေပါတယ်ရှင့်။\nGame ID ကို ပြန်ပို့ပေးပါ။ (Server ID ပါ ပို့လို့ရပါတယ် ဥပမာ 824412642(12267))').catch(() => {});
+        await ctx.telegram.editMessageText(ctx.chat.id, wait.message_id, undefined, '❌ Game ID / Server ID မှားနေပါတယ်ရှင့်။\nGame ID ကို ပြန်ပို့ပေးပါ။').catch(() => {});
         return true;
       }
       console.error('ml lookup failed:', e && e.code, e && e.message);
@@ -195,7 +195,7 @@ function register(bot, d) {
     if (s.level === 'ml_uid') {
       const both = /^(\d{4,15})\s*[(（\[]\s*(\d{1,8})\s*[)）\]]$/.exec(text) || /^(\d{4,15})[\s,/-]+(\d{1,8})$/.exec(text);
       if (both) return runLookup(ctx, s, both[1], both[2]);
-      if (!/^\d{4,15}$/.test(text)) { await ctx.reply('⚠️ Game ID က ဂဏန်းသက်သက် ဖြစ်ရပါမယ်ရှင့်။ ပြန်ပို့ပေးပါ။\n(Server ID ပါ ပို့လို့ရပါတယ် ဥပမာ 824412642(12267))'); return true; }
+      if (!/^\d{4,15}$/.test(text)) { await ctx.reply('⚠️ Game ID က ဂဏန်းသက်သက် ဖြစ်ရပါမယ်ရှင့်။ ပြန်ပို့ပေးပါ။'); return true; }
       s.ml.uid = text; s.level = 'ml_zone';
       await ctx.reply('ကောင်းပါပြီ ✅ ဆက်ပြီး <b>Server ID</b> ပို့ပေးပါ (ကွင်းထဲက ဂဏန်း)', { parse_mode: 'HTML' });
       return true;
