@@ -991,10 +991,7 @@
   // ==================================================================
   // PAGE: ML TopUp (Mobile Legends diamonds, bought on Smile One)
   // ==================================================================
-  function pageMl(view) {
-    const root = h('div', { class: 'stack' });
-    view.append(h('div', { style: 'height:12px' }), root);
-    const OSTATUS = { done: '🟢 ပြီး', processing: '⏳ လုပ်နေ', check: '🟠 စစ်ရန်', failed: '🔴 မအောင်', refunded: '↩️ ငွေပြန်ထည့်ပြီး', dryrun: '🧪 စမ်းသပ်' };
+  function mlSettings(root) {
     const sw = (label, checked, onchange, hint) => h('div', { class: 'row nowrap', style: 'padding:6px 0' },
       h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked, onchange }), h('i')),
       h('div', { class: 'grow' }, label, hint ? h('div', { class: 'muted small' }, hint) : null));
@@ -1029,7 +1026,7 @@
       });
       file.addEventListener('change', async () => { if (file.files[0]) send(await file.files[0].text()); });
       const cardSess = h('div', { class: 'card' }, h('h2', {}, 'Smile One session'), h('div', { class: 'stack' }, out,
-        h('div', { class: 'muted small' }, 'Laptop မှာ tools/save_session_smile.py ကို run ပြီး ထွက်တဲ့ smileone_session.json ကို (က) ဒီမှာ ဖိုင်ရွေးပါ၊ (ခ) paste လုပ်ပါ၊ ဒါမှမဟုတ် (ဂ) Bot chat ထဲ ဖိုင်အနေနဲ့ ပို့ပါ (Admin ဆီကပဲ လက်ခံ၊ chat ထဲက ဖိုင်ကို ဖျက်ပေးမယ်)။ smile.one မဟုတ်တဲ့ cookie တွေကို အလိုအလျောက် ဖယ်ပါတယ်။'),
+        h('div', { class: 'muted small' }, 'Session ကုန်ရင်: Laptop မှာ tools\\get_session.bat ကို double-click → ပွင့်လာတဲ့ Chrome မှာ smile.one login ဝင် → ဒီ window မှာ Enter နှိပ်ပါ။ JSON ကို clipboard ထဲ အလိုအလျောက် copy ပေးထားပါတယ် → အောက်က ကွက်ထဲ paste ပြီး "သိမ်းမည်" နှိပ်ပါ (ဒါမှမဟုတ် smileone_session.json ဖိုင်ကို ဒီမှာ ရွေးပါ / Bot chat ထဲ ပို့ပါ)။ smile.one မဟုတ်တဲ့ cookie တွေကို အလိုအလျောက် ဖယ်ပါတယ်။ Session ကုန်ရင် Bot က Admin ကို ကိုယ်တိုင် သတိပေးပါမယ်။'),
         file, paste,
         h('div', { class: 'row' },
           h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => { if (!paste.value.trim()) return toast('paste လုပ်ပါ', 'err'); await send(paste.value); }) }, 'သိမ်းမည်'),
@@ -1088,20 +1085,124 @@
           h('button', { class: 'btn', onclick: async (e) => { const d = Number(delta.value); if (!Number.isFinite(d) || !delta.value) return toast('ဂဏန်း ထည့်ပါ', 'err'); if (await confirmBox('အားလုံးပြောင်းမည်', `Package အားလုံးရဲ့ % ကို ${d > 0 ? '+' : ''}${d} ပြောင်းမလား?`, 'ပြောင်းမည်')) busy(e.target, async () => { await POST('/ml/bulk', { delta: d }); delta.value = ''; toast('ပြောင်းပြီး ✅', 'ok'); load(); }); } }, 'ပြောင်းမည်')),
         h('div', { class: 'list' }, rows));
 
-      // ---- 5) recent orders
-      const cardOr = h('div', { class: 'card' }, h('h2', {}, 'နောက်ဆုံး order များ'),
-        r.orders.length ? h('div', { class: 'list' }, r.orders.map(o => h('div', { class: 'item' },
-          h('div', { class: 'row nowrap' },
-            h('div', { class: 'grow' }, h('strong', {}, o.label), ' ', h('span', { class: 'pill' }, OSTATUS[o.status] || o.status),
-              h('div', { class: 'muted small' }, `${o.gameName || '-'} · ${o.gameId}/${o.zoneId} · user ${o.userId} · ${mmk(o.price)} · Coins ${o.chargedCoins != null ? o.chargedCoins : '?'}/${o.costCoins} · ${dt(o.createdAt)}`),
-              o.note ? h('div', { class: 'muted small' }, o.note) : null),
-            ['check', 'processing'].includes(o.status) ? [
-              h('button', { class: 'btn sm', onclick: async (e) => { if (await confirmBox('ပြီးပြီ', 'Smile One /customer/order မှာ ဝင်သွားတာ သေချာပါသလား? ဝယ်သူကို အောင်မြင်ကြောင်း ပို့မယ်။', 'ပြီးပြီ')) busy(e.target, async () => { await POST('/ml/orders/' + o.id + '/done'); load(); }); } }, 'ပြီးပြီ'),
-              h('button', { class: 'btn sm danger', onclick: async (e) => { if (await confirmBox('ငွေပြန်ထည့်', mmk(o.price) + ' ကို user ' + o.userId + ' ဆီ ပြန်ထည့်မလား? (Smile One မှာ မဝင်ကြောင်း အရင်စစ်ပါ)', 'ပြန်ထည့်မည်', true)) busy(e.target, async () => { await POST('/ml/orders/' + o.id + '/refund'); load(); }); } }, 'ငွေပြန်ထည့်')] : null)))) : empty('Order မရှိသေးပါ'));
-
-      root.replaceChildren(cardVis, cardSess, cardCost, cardPk, cardOr);
+      root.replaceChildren(cardVis, cardSess, cardCost, cardPk);
     }
     load();
+  }
+
+
+  const MLSTATUS = { done: '🟢 ပြီး', processing: '⏳ လုပ်နေ', check: '🟠 စစ်ရန်', failed: '🔴 မအောင်', refunded: '↩️ ငွေပြန်ထည့်ပြီး', dryrun: '🧪 စမ်းသပ်' };
+
+  // ---- ML > Orders : filter / search / pages, tap for every detail ----
+  function mlOrders(root) {
+    let status = '', page = 1, q = '';
+    const list = h('div', { class: 'stack' });
+    const chips = h('div', { class: 'chips' });
+    const FILTERS = [['', 'အားလုံး'], ['done', 'ပြီး'], ['check', '🟠 စစ်ရန်'], ['processing', 'လုပ်နေ'], ['problem', '⚠️ Problem'], ['failed', 'မအောင်'], ['refunded', 'ငွေပြန်'], ['dryrun', '🧪 စမ်းသပ်']];
+    const search = h('input', { type: 'search', placeholder: 'User ID / Game ID / နာမည် / Package ရှာရန်', oninput: debounce(() => { q = search.value.trim(); page = 1; load(); }, 350) });
+    const drawChips = () => chips.replaceChildren(...FILTERS.map(([k, l]) => h('button', { class: 'chip' + (status === k ? ' on' : ''), onclick: () => { status = k; page = 1; drawChips(); load(); } }, l)));
+    root.replaceChildren(h('div', { class: 'toolbar' }, search), chips, list); drawChips();
+    async function load() {
+      let r; try { r = await GET(`/ml/orders?status=${status}&q=${encodeURIComponent(q)}&page=${page}`); } catch (e) { return fail(e); }
+      list.replaceChildren(h('div', { class: 'muted small' }, `စုစုပေါင်း ${fmt(r.total)} ခု`));
+      if (!r.items.length) list.appendChild(empty('Order မရှိပါ'));
+      r.items.forEach(o => list.appendChild(mlOrderCard(o, load)));
+      const p = pager(r, n => { page = n; load(); }); if (p) list.appendChild(p);
+    }
+    load();
+  }
+  function mlOrderCard(o, reload) {
+    return h('div', { class: 'card', style: 'cursor:pointer', onclick: () => mlOrderOpen(o, reload) },
+      h('div', { class: 'row nowrap' },
+        h('div', { class: 'grow' }, h('div', { class: 'trunc', style: 'font-weight:700' }, o.label), h('div', { class: 'muted small trunc' }, `${o.gameName || '-'} · ${o.gameId}/${o.zoneId}`)),
+        h('span', { class: 'pill acc' }, '#' + o.shortId), h('span', { class: 'pill' }, MLSTATUS[o.status] || o.status)),
+      h('div', { class: 'row small muted', style: 'margin-top:6px;justify-content:space-between' },
+        h('span', {}, `user ${o.userId}`),
+        h('span', {}, `${fmt(o.price)} ကျပ်${o.profit != null ? ' (+' + fmt(o.profit) + ')' : ''}`),
+        h('span', {}, dt(o.createdAt))));
+  }
+  function mlOrderOpen(o, reload) {
+    const done = (m) => { m.close(); reload(); };
+    const act = ['check', 'processing'].includes(o.status);
+    const m = modal(`ML Order #${o.shortId}`, h('div', { class: 'stack' },
+      kv([
+        ['Package', o.label + (o.qty > 1 ? ` (${o.qty} ကြိမ်ဝယ်)` : '')],
+        ['Status', h('span', { class: 'pill' }, MLSTATUS[o.status] || o.status)],
+        ['Smile One status', o.smileText ? h('span', { class: 'pill' }, o.smileText + (o.smileCheckedAt ? ' · ' + dt(o.smileCheckedAt) : '')) : 'မစစ်ရသေးပါ'],
+        ['Smile order ID', o.smileOrderIds.length ? h('span', { class: 'mono' }, o.smileOrderIds.join(', ')) : '-'],
+        ['User', h('button', { class: 'link', onclick: () => { m.close(); openUser(o.userId); } }, o.userId)],
+        ['Game name', o.gameName || '-'], ['Game ID / Server', h('span', { class: 'row', style: 'justify-content:flex-end' }, h('span', { class: 'mono' }, `${o.gameId} (${o.zoneId})`), copyBtn(o.gameId))],
+        ['ကျသင့်ငွေ (customer)', mmk(o.price)],
+        ['Smile Coins ကုန်', `${o.coins} ${o.chargedCoins != null ? '(တကယ်)' : '(ခန့်မှန်း)'}`],
+        ['ကုန်ကျစရိတ်', mmk(o.cost) + (o.rate ? ` (1 Coin = ${Math.round(o.rate * 100) / 100} ကျပ်)` : '')],
+        ['အမြတ်', o.profit == null ? '-' : `${mmk(o.profit)} (${o.margin}%)`],
+        ['ပေးပြီး / ကြိမ်ရေ', `${o.delivered || 0} / ${o.qty}`],
+        ['အချိန်', dt(o.createdAt)],
+        o.note ? ['မှတ်ချက်', o.note] : null
+      ]),
+      ['done', 'check', 'processing'].includes(o.status) ? h('button', { class: 'btn', onclick: (e) => busy(e.target, async () => {
+        const x = await POST('/ml/orders/' + o.id + '/check');
+        toast('Smile One: ' + x.smile + (x.found && x.found.length ? ' · ' + x.found.join(' ; ') : ''), 'ok'); done(m);
+      }) }, '↻ Smile One ကနေ status ပြန်စစ်ရန်') : null,
+      act ? h('button', { class: 'btn', onclick: async (e) => { if (await confirmBox('ပြီးပြီ', 'Smile One မှာ ဝင်သွားတာ သေချာပါသလား? ဝယ်သူကို အောင်မြင်ကြောင်း ပို့မယ်။', 'ပြီးပြီ')) busy(e.target, async () => { await POST('/ml/orders/' + o.id + '/done'); done(m); }); } }, '✅ ပြီးပြီ (ဂိမ်းထဲဝင်ပြီ)') : null,
+      (act || (o.status === 'done' && ['3', '4', '6'].includes(o.smileStatus))) ? h('button', { class: 'btn danger', onclick: async (e) => { if (await confirmBox('ငွေပြန်ထည့်', mmk(o.price) + ' ကို user ' + o.userId + ' ဆီ ပြန်ထည့်မလား? (ဝင်မသွားကြောင်း အရင်စစ်ပါ)', 'ပြန်ထည့်မည်', true)) busy(e.target, async () => { await POST('/ml/orders/' + o.id + '/refund'); done(m); }); } }, '↩️ ငွေပြန်ထည့်') : null));
+  }
+
+  // ---- ML > Profit : only Mobile Legends earnings ----
+  function mlProfit(root) {
+    root.replaceChildren(h('div', { class: 'muted' }, '⏳ တွက်နေပါတယ်…'));
+    GET('/ml/profit').then(r => {
+      if (!r) return root.replaceChildren(empty('Database မချိတ်ရသေးပါ'));
+      const S = r.sums;
+      const box = (title, s) => h('div', { class: 'card' }, h('div', { class: 'muted small' }, title),
+        h('div', { style: 'font-size:1.5em;font-weight:800' }, mmk(s.profit)),
+        h('div', { class: 'muted small' }, `${fmt(s.orders)} order · ရောင်း ${mmk(s.revenue)} · ကုန်ကျ ${mmk(s.cost)} · ${s.margin}%`));
+      const table = (head, rows) => h('div', { class: 'card' }, h('div', { class: 'list' }, [h('div', { class: 'item row nowrap muted small', style: 'font-weight:700' }, ...head.map((x, i) => h('div', { class: i ? 'right' : 'grow', style: i ? 'min-width:64px' : '' }, x))),
+        ...rows.map(r => h('div', { class: 'item row nowrap' }, ...r.map((x, i) => h('div', { class: i ? 'right' : 'grow trunc', style: i ? 'min-width:64px' : '' }, String(x)))))]));
+      root.replaceChildren(
+        h('div', { class: 'muted small' }, `1 Smile Coin = ${r.mmkPerCoin} ကျပ် ဖြင့် တွက်ထားသည်။ ပြီးဆုံး ("ပြီး") order များသာ ပါသည်၊ မအောင်မြင်/ငွေပြန်ထည့်ပြီး မပါပါ။`),
+        h('div', { class: 'grid kpi' }, box('ဒီနေ့ အမြတ်', S.today), box('မနေ့က', S.yesterday), box('၇ ရက်', S.d7), box('၃၀ ရက်', S.d30), box('စုစုပေါင်း', S.all)),
+        h('div', { class: 'card' }, kv([
+          ['Smile Coins ကုန် (စုစုပေါင်း)', fmt(S.all.coins)], ['စစ်ရန်/လုပ်နေဆဲ order', fmt(r.check)], ['မအောင် (၃၀ ရက်)', fmt(r.failed30)], ['ငွေပြန်ထည့် (၃၀ ရက်)', fmt(r.refunded30)]])),
+        h('h3', {}, 'Package အလိုက် (၃၀ ရက်)'),
+        r.byPackage.length ? table(['Package', 'ခု', 'ရောင်း', 'အမြတ်'], r.byPackage.map(x => [x.label, x.orders, fmt(x.revenue), fmt(x.profit)])) : empty('မရှိသေးပါ'),
+        h('h3', {}, 'နေ့အလိုက် (၁၄ ရက်)'),
+        r.byDay.length ? table(['ရက်', 'ခု', 'ရောင်း', 'အမြတ်'], r.byDay.map(x => [x.day, x.orders, fmt(x.revenue), fmt(x.profit)])) : empty('မရှိသေးပါ'),
+        h('h3', {}, 'ဝယ်ယူမှုအများဆုံး (၃၀ ရက်)'),
+        r.topCustomers.length ? table(['User ID', 'ခု', 'ရောင်း', 'အမြတ်'], r.topCustomers.map(x => [x.userId, x.orders, fmt(x.revenue), fmt(x.profit)])) : empty('မရှိသေးပါ'));
+    }).catch(fail);
+  }
+
+  // ---- ML > Check : is every part working? (nothing is bought) ----
+  function mlCheck(root) {
+    const uid = h('input', { type: 'tel', placeholder: 'Game ID (မထည့်လည်းရ)', inputmode: 'numeric' });
+    const zone = h('input', { type: 'tel', placeholder: 'Server ID', inputmode: 'numeric' });
+    const out = h('div', { class: 'stack' });
+    root.replaceChildren(h('div', { class: 'card' }, h('h2', {}, '🩺 အလုပ်လုပ်မလုပ် စစ်ဆေးမှု'), h('div', { class: 'stack' },
+      h('div', { class: 'muted small' }, 'Session၊ login၊ လက်ကျန်၊ ဈေးစာရင်း၊ order စစ်တဲ့ အပိုင်းနဲ့ Player name စစ်တဲ့အပိုင်း အားလုံးကို တစ်ခါတည်း စစ်ပါတယ်။ ဘာမှ မဝယ်ပါဘူး။ Game ID/Server ID ထည့်ရင် Player name စစ်တာကိုပါ စမ်းပါမယ်။'),
+      h('div', { class: 'row' }, uid, zone),
+      h('button', { class: 'btn primary', onclick: (e) => busy(e.target, async () => {
+        out.replaceChildren(h('div', { class: 'muted' }, '⏳ စစ်နေပါတယ်…'));
+        const r = await POST('/ml/diagnose', { uid: uid.value, zone: zone.value });
+        out.replaceChildren(
+          h('div', { style: 'font-weight:800' }, r.ok ? '✅ အားလုံး အလုပ်လုပ်နေပါတယ်' : '⚠️ ပြဿနာ ရှိပါတယ်'),
+          h('div', { class: 'list' }, r.steps.map(s => h('div', { class: 'item row nowrap' }, h('span', {}, s.ok ? '✅' : '❌'), h('div', { class: 'grow' }, h('strong', {}, s.name), h('div', { class: 'muted small' }, s.detail))))),
+          h('div', { class: 'muted small' }, dt(r.at)),
+          r.steps.some(s => !s.ok && /NOT_LOGGED_IN|CLOUDFLARE|NO_SESSION|csrf/.test(s.detail + s.name)) ? h('div', { class: 'card' }, '👉 Session ကုန်နေပုံရပါတယ်။ Laptop မှာ get_session.bat ကို double-click → Chrome မှာ login → Enter → JSON ကို Settings tab မှာ paste လုပ်ပါ။') : null);
+      }) }, 'စစ်ဆေးမည်'),
+      out)));
+  }
+
+  // ---- the page: Settings | Orders | Profit | Check ----
+  function pageMl(view) {
+    let tab = 'settings';
+    const chips = h('div', { class: 'chips', style: 'margin-bottom:12px' });
+    const body = h('div', { class: 'stack' });
+    const TABS = [['settings', '⚙️ Settings'], ['orders', '📦 Orders'], ['profit', '💰 Profit'], ['check', '🩺 Check']];
+    const drawTabs = () => chips.replaceChildren(...TABS.map(([k, l]) => h('button', { class: 'chip' + (tab === k ? ' on' : ''), onclick: () => { tab = k; drawTabs(); show(); } }, l)));
+    function show() { ({ settings: mlSettings, orders: mlOrders, profit: mlProfit, check: mlCheck })[tab](body); }
+    view.append(h('div', { style: 'height:12px' }), chips, body);
+    drawTabs(); show();
   }
 
   // ==================================================================
