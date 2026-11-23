@@ -1169,6 +1169,9 @@ module.exports = function mountAdminPanel(app, deps) {
   // Mobile Legends TopUp (bot -> Smile One): visibility, prices, session, orders
   // ======================================================================
   api.get('/ml', wrap(async (req, res) => res.json(await ml.adminState())));
+  api.get('/ml/orders', wrap(async (req, res) => res.json(await ml.adminOrders({ status: String(req.query.status || ''), q: String(req.query.q || ''), page: req.query.page }))));
+  api.get('/ml/profit', wrap(async (req, res) => res.json(await ml.adminProfit())));
+  api.post('/ml/diagnose', wrap(async (req, res) => res.json(await ml.adminDiagnose(req.body || {}))));
   api.post('/ml/settings', wrap(async (req, res) => {
     await ml.adminSettings(req.body || {});
     log(req, 'ml_settings', JSON.stringify(req.body || {}).slice(0, 300));
@@ -1197,9 +1200,9 @@ module.exports = function mountAdminPanel(app, deps) {
     catch (e) { res.json({ ok: false, code: e.code || 'ERROR', message: String(e.message || e).slice(0, 200) }); }
   }));
   api.post('/ml/orders/:id/:action', wrap(async (req, res) => {
-    await ml.adminOrderAction(req.params.id, req.params.action, safeSend);
+    const r = await ml.adminOrderAction(req.params.id, req.params.action, safeSend);
     log(req, 'ml_order_' + req.params.action, req.params.id);
-    res.json({ ok: true });
+    res.json({ ok: true, ...(r || {}) });
   }));
 
   api.get('/settings', wrap(async (req, res) => {

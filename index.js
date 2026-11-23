@@ -787,10 +787,12 @@ bot.action(new RegExp(`^tgacc_old_${OID}$`), (ctx) => runTgCode(ctx, ctx.match[1
 // ---- History: Orders History menu -> Account / Boost
 bot.action('hist_menu', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await showHistoryMenu(ctx); });
 async function showHistoryMenu(ctx) {
-  return showInline(ctx, texts.t('tgacc_hist_menu'), Markup.inlineKeyboard([
+  const rows = [
     [Markup.button.callback('Account ဝယ်ယူမှုမှတ်တမ်း', 'tgh_1')],
     [Markup.button.callback('Boost မှတ်တမ်း', 'hist_boost')]
-  ]));
+  ];
+  if (await ml.hasHistory(ctx.from.id, isAdmin(ctx.from.id))) rows.push([Markup.button.callback('MlbbTopup ဝယ်ယူမှုမှတ်တမ်း', 'ml_hist_1')]);
+  return showInline(ctx, texts.t('tgacc_hist_menu'), Markup.inlineKeyboard(rows));
 }
 bot.action('hist_boost', async (ctx) => { await ctx.answerCbQuery().catch(() => {}); await sendHistory(ctx, 1, true); });
 

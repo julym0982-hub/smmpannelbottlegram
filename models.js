@@ -219,9 +219,14 @@ const MlOrderSchema = new mongoose.Schema({
   price: Number,        // MMK taken from the customer
   costCoins: Number,    // Smile Coins this order was priced on
   chargedCoins: Number, // Smile Coins really spent (from the Smile One balance difference)
+  rate: Number,         // MMK per Smile Coin when the order was placed (cost = coins x rate)
   delivered: { type: Number, default: 0 },
   status: { type: String, enum: ['processing', 'done', 'failed', 'check', 'refunded', 'dryrun'], default: 'processing', index: true },
   note: String,
+  smileOrderIds: { type: [String], default: [] }, // Smile One order numbers matched to this order
+  smileStatus: String,   // 1..7 as on Smile One (or 'part')
+  smileCheckedAt: Date,
+  notFoundAlert: Boolean,
   createdAt: { type: Date, default: Date.now, index: true }
 });
 MlOrderSchema.index({ status: 1, createdAt: -1 });

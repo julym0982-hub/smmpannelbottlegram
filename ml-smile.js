@@ -95,7 +95,7 @@ function mergeCookies(res) {
     if (jar.get(m[1]) !== m[2]) { jar.set(m[1], m[2]); jarDirty = true; }
   }
 }
-async function http(method, url, { form, ajax, timeout = 25000, follow = true } = {}) {
+async function http(method, url, { form, ajax, referer, timeout = 25000, follow = true } = {}) {
   const j = loadJar();
   if (!j.size) throw new SmileError('NO_SESSION', 'Smile One session မရှိသေးပါ');
   let cur = url;
@@ -105,7 +105,7 @@ async function http(method, url, { form, ajax, timeout = 25000, follow = true } 
       Cookie: [...j].map(([k, v]) => `${k}=${v}`).join('; ')
     };
     if (form) headers['Content-Type'] = 'application/x-www-form-urlencoded';
-    if (method !== 'GET') { headers.Referer = PAGE; headers.Origin = BASE; }
+    if (method !== 'GET') { headers.Referer = referer || PAGE; headers.Origin = BASE; } else if (referer) headers.Referer = referer;
     if (ajax) headers['X-Requested-With'] = 'XMLHttpRequest';
     const res = await axios.request({
       method, url: cur, headers, timeout, maxRedirects: 0, validateStatus: () => true,
@@ -146,7 +146,14 @@ async function getPage() {
   if (!csrf) throw new SmileError('NOT_LOGGED_IN', 'csrf မတွေ့ပါ - session ကုန်နေနိုင်ပါတယ်');
   return { csrf, info: pageInfo(r.body) };
 }
+let lastBal = { v: null, at: 0 };
+const lastBalance = () => lastBal;
 async function getBalance() {
+  const v = await getBalanceRaw();
+  lastBal = { v, at: Date.now() };
+  return v;
+}
+async function getBalanceRaw() {
   const r = await http('GET', BASE + '/customer/order');
   const low = r.body.toLowerCase();
   if (!/logout|sair|sign out/.test(low)) throw new SmileError('NOT_LOGGED_IN', 'login မဝင်ထားပါ (session ကုန်)');
@@ -265,8 +272,57 @@ function purchase({ pid, qty, uid, zone, perUnitCoins }) {
   });
 }
 
+// Smile One order list for one game user (read only). Times on Smile One are UTC-3.
+const smileTime = (s) => Date.parse(String(s || '').replace(' ', 'T') + '-03:00');
+async function listOrdersRaw({ uid, startdate, enddate }) {
+  const qs = new URLSearchParams({ type: 'orderlist', p: '1', pageSize: '50', status: '', startdate, enddate, order_type: '', key: '', user_id: String(uid) }).toString();
+  const r = await http('GET', BASE + '/customer/activationcode/codelist?' + qs, { ajax: true, referer: BASE + '/customer/order' });
+  let j;
+  try { j = JSON.parse(r.body); } catch (_) { throw new SmileError('BAD_REPLY', 'order list ကို နားမလည်နိုင်ပါ (session ကုန်နေနိုင်)'); }
+  return (Array.isArray(j.list) ? j.list : []).map(o => ({
+    id: String(o.increment_id || ''), uid: String(o.user_id || ''), zone: String(o.server_id || ''), pid: String(o.goods_id || ''),
+    status: String(o.number_status != null ? o.number_status : o.status), text: String(o.order_status || ''),
+    at: smileTime(o.updated_at), brl: Number(o.transaction_amount), listBrl: Number(o.grand_total)
+  }));
+}
+const listOrders = (a) => exclusive(() => listOrdersRaw(a));
+
+// Admin "everything working?" check. Read only: nothing is bought. Returns [{name, ok, detail}].
+// uid/zone (optional) = a real player to test the name lookup with.
+function diagnose({ uid, zone } = {}) {
+  return exclusive(async () => {
+    const steps = [];
+    const add = (name, ok, detail) => steps.push({ name, ok: !!ok, detail: String(detail || '') });
+    const si = sessionInfo();
+    add('Session cookie', si.has, si.has ? `${si.count} ခု${si.savedAt ? ' · သိမ်းချိန် ' + si.savedAt : ''}` : 'မရှိသေးပါ');
+    if (!si.has) return steps;
+    const timed = async (fn) => { const t = Date.now(); const v = await fn(); return [v, Date.now() - t]; };
+    const code = (e) => `${e && e.code ? e.code + ': ' : ''}${String(e && e.message || e).slice(0, 140)}`;
+    try { const [b, ms] = await timed(getBalance); add('Login + Smile Coins လက်ကျန်', true, `${b} (${ms} ms)`); }
+    catch (e) { add('Login + Smile Coins လက်ကျန်', false, code(e)); return steps; } // nothing else can work
+    let pg = null;
+    try { const [x, ms] = await timed(getPage); pg = x; add('ဝယ်ယူမည့် စာမျက်နှာ (csrf)', true, `${ms} ms`); }
+    catch (e) { add('ဝယ်ယူမည့် စာမျက်နှာ (csrf)', false, code(e)); }
+    if (pg) {
+      const pids = Object.keys(FIXED_BRL);
+      const have = pids.filter(pid => expectedCoins(pid, pg.info, 3) != null);
+      add('ဈေးစာရင်း ဖတ်နိုင်မှု', have.length === pids.length, `${have.length}/${pids.length} package` + (have.length < pids.length ? ' · မဖတ်ရတာ: ' + pids.filter(x => !have.includes(x)).join(', ') : ''));
+    }
+    try {
+      const day = (ms) => new Date(ms - 3 * 3600 * 1000).toISOString().slice(0, 10);
+      const [l, ms] = await timed(() => listOrdersRaw({ uid: uid || '1', startdate: day(Date.now() - 86400000 * 2), enddate: day(Date.now()) }));
+      add('Order list (status စစ်ဖို့)', true, `${ms} ms · ${l.length} ခု`);
+    } catch (e) { add('Order list (status စစ်ဖို့)', false, code(e)); }
+    if (uid && zone && pg) {
+      try { const [r, ms] = await timed(() => checkRoleRaw(pg.csrf, '13', String(uid), String(zone))); add('Player name စစ်ခြင်း', true, `${r.name || '-'} · type ${r.type} (${ms} ms)`); }
+      catch (e) { add('Player name စစ်ခြင်း', e && e.code === 'ROLE' ? true : false, e && e.code === 'ROLE' ? 'endpoint အလုပ်လုပ် (ဒီ ID/Server ID မမှန်ပါ)' : code(e)); }
+    } else add('Player name စစ်ခြင်း', true, 'Game ID/Server ID မထည့်လို့ ကျော်ထား');
+    return steps;
+  });
+}
+
 module.exports = {
   _parse: { pageCsrf, pageInfo, visibleLines, expectedCoins },
   SmileError, FIXED_BRL, DEFAULT_COINS, liveCoins, liveAge, refreshLive,
-  sessionInfo, setSessionFromJson, clearSession, test, lookup, purchase
+  sessionInfo, setSessionFromJson, clearSession, test, lookup, purchase, listOrders, diagnose, lastBalance
 };
